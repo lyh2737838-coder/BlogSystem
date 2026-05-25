@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BlogSystem · 一个为热爱写作的人准备的地方</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%A8%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css" id="hljs-theme">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/common.min.js"></script>
+</head>
+<body>
+  <!-- 动态背景 -->
+  <div class="bg-aurora">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+  </div>
+
+  <!-- 顶部导航 -->
+  <header class="nav">
+    <div class="nav-inner">
+      <a href="#/" class="logo">
+        <span class="logo-spark">✦</span>
+        <span class="logo-text">Blog<em>System</em></span>
+      </a>
+      <nav class="nav-links">
+        <a href="#/" data-route="home">首页</a>
+        <a href="#/explore" data-route="explore">探索</a>
+        <a href="#/write" data-route="write" data-auth>写作</a>
+      </nav>
+      <div class="nav-search">
+        <input id="search-input" type="text" placeholder="搜索文章、标签..." />
+        <kbd>↵</kbd>
+      </div>
+      <div class="nav-actions">
+        <button class="icon-btn" id="theme-toggle" title="切换主题">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+        <div id="user-menu"></div>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主体 -->
+  <main id="app"></main>
+
+  <!-- 全局浮层 -->
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <footer class="footer">
+    <p>BlogSystem · 用心做的小宇宙 ✦ Built with Node.js + SQLite + Vanilla JS</p>
+  </footer>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

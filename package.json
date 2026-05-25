@@ -1,0 +1,19 @@
+{
+  "name": "blog-system",
+  "version": "1.0.0",
+  "description": "A full-featured blog system with beautiful UI",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "migrate": "node server/migrate.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.22.3"
+  }
+}
