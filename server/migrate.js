@@ -89,7 +89,65 @@ CREATE TABLE IF NOT EXISTS likes (
   CONSTRAINT fk_likes_post FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
   CONSTRAINT fk_likes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS bookmarks (
+  post_id    INT UNSIGNED NOT NULL,
+  user_id    INT UNSIGNED NOT NULL,
+  created_at BIGINT       NOT NULL,
+  PRIMARY KEY (post_id, user_id),
+  KEY idx_bm_user (user_id),
+  CONSTRAINT fk_bm_post FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_bm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS follows (
+  follower_id  INT UNSIGNED NOT NULL,
+  following_id INT UNSIGNED NOT NULL,
+  created_at   BIGINT       NOT NULL,
+  PRIMARY KEY (follower_id, following_id),
+  KEY idx_follow_following (following_id),
+  CONSTRAINT fk_fo_follower  FOREIGN KEY (follower_id)  REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_fo_following FOREIGN KEY (following_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    INT UNSIGNED NOT NULL,
+  actor_id   INT UNSIGNED NOT NULL,
+  type       VARCHAR(20)  NOT NULL,
+  post_id    INT UNSIGNED NULL,
+  is_read    TINYINT      NOT NULL DEFAULT 0,
+  created_at BIGINT       NOT NULL,
+  PRIMARY KEY (id),
+  KEY idx_notif_user (user_id, is_read),
+  CONSTRAINT fk_no_user  FOREIGN KEY (user_id)  REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_no_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `;
+
+// 幂等 ALTER —— 给老库加新列；migrate 可重复运行
+async function applyAlters(conn) {
+  const [cols] = await conn.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'posts'`,
+    [DB_NAME]
+  );
+  const names = new Set(cols.map((c) => c.COLUMN_NAME));
+  if (!names.has('publish_at')) {
+    console.log('▶ ALTER posts 加列 publish_at BIGINT NULL ...');
+    await conn.query('ALTER TABLE posts ADD COLUMN publish_at BIGINT NULL DEFAULT NULL');
+    await conn.query('ALTER TABLE posts ADD INDEX idx_posts_publish_at (publish_at)');
+  }
+  if (!names.has('media_type')) {
+    console.log('▶ ALTER posts 加列 media_type / video_url / video_poster / audio_url / effects / bgm_url ...');
+    await conn.query("ALTER TABLE posts ADD COLUMN media_type VARCHAR(16) NOT NULL DEFAULT 'article'");
+    await conn.query("ALTER TABLE posts ADD COLUMN video_url VARCHAR(500) NOT NULL DEFAULT ''");
+    await conn.query("ALTER TABLE posts ADD COLUMN video_poster VARCHAR(500) NOT NULL DEFAULT ''");
+    await conn.query("ALTER TABLE posts ADD COLUMN audio_url VARCHAR(500) NOT NULL DEFAULT ''");
+    await conn.query("ALTER TABLE posts ADD COLUMN effects VARCHAR(120) NOT NULL DEFAULT ''");
+    await conn.query("ALTER TABLE posts ADD COLUMN bgm_url VARCHAR(500) NOT NULL DEFAULT ''");
+  }
+}
 
 const SEED_POSTS = [
   {
@@ -154,6 +212,7 @@ async function run() {
   const conn = await mysql.createConnection({ ...cfg, database: DB_NAME });
   console.log('▶ 创建表结构...');
   await conn.query(SCHEMA);
+  await applyAlters(conn);
 
   // 检查是否已有数据，避免重复导入
   const [[{ c: userCount }]] = await conn.query('SELECT COUNT(*) AS c FROM users');

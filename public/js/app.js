@@ -6,21 +6,62 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
 // ---------- 主题 ----------
-function initTheme() {
-  const saved = localStorage.getItem('blog_theme') || 'dark';
-  document.documentElement.setAttribute('data-theme', saved);
-  updateHljsTheme(saved);
-  $('#theme-toggle').addEventListener('click', () => {
-    const cur = document.documentElement.getAttribute('data-theme');
-    const next = cur === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem('blog_theme', next);
-    updateHljsTheme(next);
+const THEMES = [
+  { key: 'dark',  label: '暗色',     emoji: '🌙' },
+  { key: 'light', label: '浅色',     emoji: '☀️' },
+  { key: 'glass', label: '玻璃',     emoji: '🪟' },
+  { key: 'paper', label: '复古纸',   emoji: '📜' },
+  { key: 'cyber', label: '赛博',     emoji: '⚡' },
+];
+
+function applyTheme(key) {
+  document.documentElement.setAttribute('data-theme', key);
+  localStorage.setItem('blog_theme', key);
+  updateHljsTheme(key);
+  const btn = $('#theme-toggle');
+  if (btn) btn.innerHTML = (THEMES.find(t => t.key === key) || THEMES[0]).emoji;
+}
+
+function cycleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const idx = THEMES.findIndex(t => t.key === cur);
+  applyTheme(THEMES[(idx + 1) % THEMES.length].key);
+}
+
+function openThemePicker() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  showModal(`
+    <div class="modal theme-picker-pop">
+      <h2>选择主题</h2>
+      <div class="theme-swatches">
+        ${THEMES.map(t => `
+          <button class="theme-swatch ${t.key === cur ? 'active' : ''}" data-key="${t.key}">
+            <span class="swatch-emoji">${t.emoji}</span>
+            <span>${t.label}</span>
+          </button>`).join('')}
+      </div>
+    </div>
+  `);
+  $$('.theme-swatch').forEach(btn => {
+    btn.addEventListener('click', () => { applyTheme(btn.dataset.key); hideModal(); });
   });
 }
+
+function initTheme() {
+  const saved = localStorage.getItem('blog_theme') || 'dark';
+  applyTheme(saved);
+  const btn = $('#theme-toggle');
+  btn.addEventListener('click', cycleTheme);
+  btn.addEventListener('contextmenu', (e) => { e.preventDefault(); openThemePicker(); });
+  let pressTimer;
+  btn.addEventListener('pointerdown', () => { pressTimer = setTimeout(openThemePicker, 500); });
+  btn.addEventListener('pointerup', () => clearTimeout(pressTimer));
+  btn.addEventListener('pointerleave', () => clearTimeout(pressTimer));
+}
+
 function updateHljsTheme(theme) {
   const link = $('#hljs-theme');
-  link.href = theme === 'dark'
+  link.href = (theme === 'dark' || theme === 'cyber')
     ? 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css'
     : 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-light.min.css';
 }
@@ -101,7 +142,12 @@ function renderUserMenu() {
     $('#btn-login').addEventListener('click', () => authModal('login'));
     return;
   }
+  const isAdmin = user.role === 'admin';
   root.innerHTML = `
+    <button class="bell-btn" id="bell-btn" title="通知">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span class="bell-dot" id="bell-dot" style="display:none">0</span>
+    </button>
     <button class="user-avatar-btn" id="user-btn">
       <img src="${user.avatar}" alt="" />
       <span>${user.username}</span>
@@ -110,6 +156,8 @@ function renderUserMenu() {
       <a href="#/me">📝 个人中心</a>
       <a href="#/write">✍️ 写文章</a>
       <a href="#/user/${user.id}">👤 我的主页</a>
+      <a href="#/notifications">🔔 通知中心</a>
+      ${isAdmin ? `<a href="#/admin">⚙️ 管理后台</a>` : ''}
       <div class="divider"></div>
       <a class="danger" id="logout">退出登录</a>
     </div>
@@ -121,12 +169,35 @@ function renderUserMenu() {
     dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
   });
   document.addEventListener('click', () => (dd.style.display = 'none'));
+  $('#bell-btn').addEventListener('click', () => (location.hash = '#/notifications'));
   $('#logout').addEventListener('click', () => {
     Auth.clear();
+    if (window.__bellTimer) { clearInterval(window.__bellTimer); window.__bellTimer = null; }
     renderUserMenu();
     location.hash = '#/';
     toast('已退出', 'success');
   });
+  startBellPolling();
+}
+
+async function refreshBell() {
+  if (!Auth.user()) return;
+  try {
+    const { count } = await API.unreadCount();
+    const dot = $('#bell-dot');
+    if (!dot) return;
+    if (count > 0) {
+      dot.style.display = 'flex';
+      dot.textContent = count > 99 ? '99+' : String(count);
+    } else {
+      dot.style.display = 'none';
+    }
+  } catch (_) {}
+}
+function startBellPolling() {
+  if (window.__bellTimer) clearInterval(window.__bellTimer);
+  refreshBell();
+  window.__bellTimer = setInterval(refreshBell, 30_000);
 }
 
 // ---------- Markdown ----------
@@ -163,11 +234,14 @@ function fmt(ts) {
 const app = () => $('#app');
 
 function postCardHTML(p, delay = 0) {
+  const isVideo = p.media_type === 'video';
+  const coverSrc = isVideo ? (p.video_poster || p.cover) : p.cover;
   return `
-    <article class="post-card" data-href="#/post/${p.id}" style="animation-delay:${delay}ms">
+    <article class="post-card ${isVideo ? 'is-video' : ''}" data-href="#/post/${p.id}" style="animation-delay:${delay}ms">
       <div class="post-cover">
-        ${p.cover ? `<img src="${p.cover}" alt="" loading="lazy" />` : ''}
-        <span class="post-category">${p.category || '随笔'}</span>
+        ${coverSrc ? `<img src="${coverSrc}" alt="" loading="lazy" />` : ''}
+        <span class="post-category">${isVideo ? '🎬 视频' : (p.category || '随笔')}</span>
+        ${isVideo ? '<span class="play-badge">▶</span>' : ''}
       </div>
       <div class="post-body">
         <h3 class="post-title">${escapeHTML(p.title)}</h3>
@@ -313,9 +387,10 @@ async function viewPost(id) {
   }
   const me = Auth.user();
   const canEdit = me && (me.id === p.user_id || me.role === 'admin');
+  const isVideoPost = p.media_type === 'video' && p.video_url;
 
   app().innerHTML = `
-    <article class="article-page">
+    <article class="article-page${isVideoPost ? ' is-video-page' : ''}">
       <header class="article-header">
         <div class="meta-top">
           <span>${p.category}</span>
@@ -340,7 +415,11 @@ async function viewPost(id) {
         </div>
       </header>
 
-      ${p.cover ? `<div class="article-cover"><img src="${p.cover}" alt="" /></div>` : ''}
+      ${isVideoPost
+        ? `<div class="article-video-wrap" id="vplayer-host"></div>`
+        : p.cover ? `<div class="article-cover"><img src="${p.cover}" alt="" /></div>` : ''}
+
+      ${p.audio_url ? `<div class="article-audio" id="article-audio-bar"></div>` : ''}
 
       <div class="article-content">${renderMD(p.content)}</div>
 
@@ -350,6 +429,10 @@ async function viewPost(id) {
         <button class="like-btn ${p.liked ? 'liked' : ''}" id="like-btn">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="${p.liked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
           <span id="like-count">${p.likes}</span> 喜欢
+        </button>
+        <button class="bookmark-btn ${p.bookmarked ? 'marked' : ''}" id="bookmark-btn">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="${p.bookmarked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+          <span id="bookmark-count">${p.bookmarks}</span> 收藏
         </button>
       </div>
 
@@ -362,6 +445,29 @@ async function viewPost(id) {
   `;
 
   if (window.hljs) $$('.article-content pre code').forEach((b) => hljs.highlightElement(b));
+
+  if (isVideoPost) {
+    const host = document.getElementById('vplayer-host');
+    if (host && window.VideoPlayer) {
+      window.__videoPlayer = window.VideoPlayer.mount(host, { src: p.video_url, poster: p.video_poster });
+    }
+  }
+
+  if (p.audio_url) {
+    const bar = $('#article-audio-bar');
+    if (bar) {
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.preload = 'metadata';
+      audio.src = p.audio_url;
+      bar.appendChild(audio);
+    }
+  }
+
+  if (p.effects || p.bgm_url) {
+    const container = document.querySelector('.article-content');
+    if (window.applyEffects) applyEffects(p.effects || '', p.bgm_url || '', container);
+  }
 
   if (canEdit) {
     $('#btn-del').addEventListener('click', async () => {
@@ -385,6 +491,20 @@ async function viewPost(id) {
       svg.setAttribute('fill', r.liked ? 'currentColor' : 'none');
       const cnt = $('#like-count');
       cnt.textContent = Number(cnt.textContent) + (r.liked ? 1 : -1);
+    } catch (e) { toast(e.message, 'error'); }
+  });
+
+  // bookmark
+  $('#bookmark-btn').addEventListener('click', async () => {
+    if (!Auth.user()) return authModal('login');
+    try {
+      const r = await API.bookmarkPost(p.id);
+      const btn = $('#bookmark-btn');
+      btn.classList.toggle('marked', r.bookmarked);
+      btn.querySelector('svg').setAttribute('fill', r.bookmarked ? 'currentColor' : 'none');
+      const cnt = $('#bookmark-count');
+      cnt.textContent = Number(cnt.textContent) + (r.bookmarked ? 1 : -1);
+      toast(r.bookmarked ? '已收藏' : '已取消收藏', 'success');
     } catch (e) { toast(e.message, 'error'); }
   });
 
@@ -455,37 +575,116 @@ async function viewWrite(params) {
     return viewHome();
   }
   const id = params.get('id');
-  let post = { title: '', content: '', excerpt: '', cover: '', category: '随笔', tags: [] };
+  let post = { title: '', content: '', excerpt: '', cover: '', category: '随笔', tags: [], published: 1, publish_at: null,
+    media_type: 'article', video_url: '', video_poster: '', audio_url: '', effects: '', bgm_url: '' };
   if (id) {
     try {
       const r = await API.getPost(id);
       post = r.post;
     } catch (e) { toast(e.message, 'error'); }
   }
+  const isDraft = post.published === 0 && !post.publish_at;
+  const isScheduled = post.published === 0 && post.publish_at;
+  const stateLabel = isDraft ? '📝 草稿' : isScheduled ? '⏰ 定时' : '✅ 已发布';
 
   app().innerHTML = `
     <section class="editor-page">
       <div class="editor-toolbar">
         <input class="title-input" id="ed-title" placeholder="文章标题..." value="${escapeHTML(post.title)}" />
-        <input class="cover-input" id="ed-cover" placeholder="封面图 URL" value="${escapeHTML(post.cover)}" style="width:220px" />
+        <span class="ed-state" id="ed-state">${stateLabel}</span>
+      </div>
+      <div class="editor-toolbar-row">
+        <div class="ed-cover-wrap">
+          <input class="cover-input" id="ed-cover" placeholder="封面图 URL" value="${escapeHTML(post.cover || '')}" />
+          <button class="btn btn-ghost" id="ed-cover-upload" type="button">📷 上传封面</button>
+          <input type="file" id="ed-cover-file" accept="image/*" style="display:none" />
+        </div>
         <select id="ed-cat">
           ${['随笔','前端','后端','设计','生活','公告'].map(c => `<option ${c === post.category ? 'selected' : ''}>${c}</option>`).join('')}
         </select>
-        <input class="tag-input" id="ed-tags" placeholder="标签，逗号分隔" value="${(post.tags || []).join(',')}" style="width:200px" />
-        <button class="btn btn-primary" id="ed-save">${id ? '更新' : '发布'}</button>
+        <input class="tag-input" id="ed-tags" placeholder="标签，逗号分隔" value="${(post.tags || []).join(',')}" />
+        <div class="ed-save-group">
+          <button class="btn" id="ed-save-draft" type="button">💾 存草稿</button>
+          <button class="btn" id="ed-save-schedule" type="button">⏰ 定时发布</button>
+          <button class="btn btn-primary" id="ed-save-publish" type="button">${id && post.published ? '✓ 更新' : '🚀 立即发布'}</button>
+        </div>
       </div>
-      <div class="editor-grid">
-        <div class="editor-pane">
-          <div class="editor-pane-head">Markdown</div>
-          <textarea id="ed-content" placeholder="# 标题&#10;&#10;开始写吧 ✨...">${escapeHTML(post.content)}</textarea>
+
+      <div class="ed-media-tabs">
+        <button class="ed-tab ${post.media_type !== 'video' ? 'active' : ''}" data-tab="article">📝 文章</button>
+        <button class="ed-tab ${post.media_type === 'video' ? 'active' : ''}" data-tab="video">🎬 视频</button>
+      </div>
+
+      <div id="ed-article-area" style="${post.media_type === 'video' ? 'display:none' : ''}">
+        <div class="editor-grid">
+          <div class="editor-pane">
+            <div class="editor-pane-head">
+              <span>Markdown</span>
+              <button class="ed-insert-img" id="ed-insert-img" type="button">📷 插入图片</button>
+              <input type="file" id="ed-img-file" accept="image/*" style="display:none" />
+              <button class="ed-insert-img" id="ed-attach-audio" type="button">🎵 附加音频</button>
+              <input type="file" id="ed-audio-file" accept="audio/*" style="display:none" />
+              <span id="ed-audio-label" style="font-size:12px;color:var(--text-muted)"></span>
+            </div>
+            <textarea id="ed-content" placeholder="# 标题&#10;&#10;开始写吧 ✨...">${escapeHTML(post.content)}</textarea>
+          </div>
+          <div class="editor-pane">
+            <div class="editor-pane-head"><span>实时预览</span></div>
+            <div class="preview article-content" id="ed-preview"></div>
+          </div>
         </div>
-        <div class="editor-pane">
-          <div class="editor-pane-head">实时预览</div>
-          <div class="preview article-content" id="ed-preview"></div>
+      </div>
+
+      <div id="ed-video-area" class="video-upload-area" style="${post.media_type !== 'video' ? 'display:none' : ''}">
+        <div class="ed-video-row">
+          <div class="ed-upload-box" id="ed-video-box">
+            <input type="file" id="ed-video-file" accept="video/*" style="display:none" />
+            <button class="btn btn-ghost" id="ed-video-upload">🎬 上传视频</button>
+            <span id="ed-video-label" class="ed-upload-label">${post.video_url ? post.video_url.split('/').pop() : '未选择'}</span>
+          </div>
+          <div class="ed-upload-box" id="ed-poster-box">
+            <input type="file" id="ed-poster-file" accept="image/*" style="display:none" />
+            <button class="btn btn-ghost" id="ed-poster-upload">🖼 上传封面</button>
+            <span id="ed-poster-label" class="ed-upload-label">${post.video_poster ? post.video_poster.split('/').pop() : '未选择'}</span>
+          </div>
         </div>
+        <div class="upload-progress" id="ed-video-progress" style="display:none">
+          <div class="upload-progress-bar"><div class="upload-progress-fill" id="ed-video-fill"></div></div>
+          <div class="upload-progress-meta">
+            <span id="ed-video-pct">0%</span>
+            <span id="ed-video-speed"></span>
+            <button class="btn btn-ghost btn-mini" id="ed-video-cancel" type="button">取消</button>
+          </div>
+        </div>
+        ${post.video_url ? `<video class="ed-video-preview" controls preload="metadata" poster="${post.video_poster || ''}" src="${post.video_url}"></video>` : '<video class="ed-video-preview" controls preload="metadata" style="display:none"></video>'}
+        <textarea id="ed-excerpt" class="ed-excerpt" placeholder="视频简介（可选）...">${escapeHTML(post.excerpt || '')}</textarea>
+      </div>
+
+      <div class="ed-effects-panel">
+        <span class="ed-effects-title">✨ 文章特效</span>
+        ${['typewriter:打字机','snow:雪花','sakura:樱花'].map(s => {
+          const [k, label] = s.split(':');
+          const checked = (post.effects || '').split(',').includes(k) ? 'checked' : '';
+          return `<label><input type="checkbox" class="ed-effect-cb" value="${k}" ${checked}/> ${label}</label>`;
+        }).join('')}
+        <button class="btn btn-ghost" id="ed-bgm-upload" type="button">🎵 BGM</button>
+        <input type="file" id="ed-bgm-file" accept="audio/*" style="display:none" />
+        <span id="ed-bgm-label" style="font-size:12px;color:var(--text-muted)">${post.bgm_url ? post.bgm_url.split('/').pop() : ''}</span>
       </div>
     </section>
   `;
+
+  // 媒体 tab 切换
+  const edState = { mediaType: post.media_type || 'article', videoUrl: post.video_url || '', videoPoster: post.video_poster || '', audioUrl: post.audio_url || '', bgmUrl: post.bgm_url || '' };
+  $$('.ed-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      $$('.ed-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      edState.mediaType = btn.dataset.tab;
+      $('#ed-article-area').style.display = edState.mediaType === 'video' ? 'none' : '';
+      $('#ed-video-area').style.display = edState.mediaType === 'video' ? '' : 'none';
+    });
+  });
 
   const content = $('#ed-content');
   const preview = $('#ed-preview');
@@ -496,20 +695,187 @@ async function viewWrite(params) {
   content.addEventListener('input', update);
   update();
 
-  $('#ed-save').addEventListener('click', async () => {
-    const data = {
+  // 封面上传
+  $('#ed-cover-upload').addEventListener('click', () => $('#ed-cover-file').click());
+  $('#ed-cover-file').addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const r = await API.uploadImage(f);
+      $('#ed-cover').value = r.url;
+      toast('封面已上传', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  // 插入正文图片
+  $('#ed-insert-img').addEventListener('click', () => $('#ed-img-file').click());
+  $('#ed-img-file').addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const r = await API.uploadImage(f);
+      const ta = content;
+      const md = `\n![](${r.url})\n`;
+      const pos = ta.selectionStart || ta.value.length;
+      ta.value = ta.value.slice(0, pos) + md + ta.value.slice(pos);
+      ta.focus();
+      ta.selectionStart = ta.selectionEnd = pos + md.length;
+      update();
+      toast('图片已插入', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+    e.target.value = '';
+  });
+
+  // 音频附件
+  $('#ed-attach-audio').addEventListener('click', () => $('#ed-audio-file').click());
+  $('#ed-audio-file').addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const r = await API.uploadAudio(f);
+      edState.audioUrl = r.url;
+      $('#ed-audio-label').textContent = `已附加：${f.name} [移除]`;
+      $('#ed-audio-label').style.cursor = 'pointer';
+      $('#ed-audio-label').onclick = () => { edState.audioUrl = ''; $('#ed-audio-label').textContent = ''; };
+      toast('音频已附加', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+    e.target.value = '';
+  });
+
+  // 视频上传（带进度 + 取消）
+  let curVideoUpload = null;
+  const fmtSize = (b) => b > 1024 * 1024 * 1024 ? (b / 1024 / 1024 / 1024).toFixed(2) + ' GB' : (b / 1024 / 1024).toFixed(1) + ' MB';
+  const fmtSpeed = (b) => b > 1024 * 1024 ? (b / 1024 / 1024).toFixed(1) + ' MB/s' : (b / 1024).toFixed(0) + ' KB/s';
+  $('#ed-video-upload').addEventListener('click', () => $('#ed-video-file').click());
+  $('#ed-video-cancel').addEventListener('click', () => { if (curVideoUpload) curVideoUpload.abort(); });
+  $('#ed-video-file').addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    e.target.value = '';
+    const limits = window.__uploadLimits || { video_mb: 0 };
+    if (limits.video_mb > 0 && f.size > limits.video_mb * 1024 * 1024) {
+      const limitTxt = limits.video_mb >= 1024 ? (limits.video_mb / 1024).toFixed(1) + 'GB' : limits.video_mb + 'MB';
+      return toast(`视频过大（${fmtSize(f.size)}），上限 ${limitTxt}`, 'error');
+    }
+    const prog = $('#ed-video-progress');
+    const fill = $('#ed-video-fill');
+    const pct = $('#ed-video-pct');
+    const spd = $('#ed-video-speed');
+    const btn = $('#ed-video-upload');
+    prog.style.display = '';
+    btn.disabled = true;
+    fill.style.width = '0%';
+    pct.textContent = '0%';
+    spd.textContent = '准备上传…';
+    try {
+      curVideoUpload = API.uploadVideo(f, ({ percent, loaded, total, speed }) => {
+        fill.style.width = percent + '%';
+        pct.textContent = percent.toFixed(1) + '%';
+        spd.textContent = `${fmtSize(loaded)} / ${fmtSize(total)} · ${fmtSpeed(speed)}`;
+      });
+      const r = await curVideoUpload;
+      edState.videoUrl = r.url;
+      $('#ed-video-label').textContent = f.name;
+      const prev = $('.ed-video-preview');
+      if (prev) { prev.src = r.url; prev.style.display = ''; }
+      toast('视频已上传', 'success');
+    } catch (err) {
+      toast(err.message, err.message === '已取消' ? 'info' : 'error');
+    } finally {
+      curVideoUpload = null;
+      btn.disabled = false;
+      setTimeout(() => { prog.style.display = 'none'; }, 800);
+    }
+  });
+
+  // 视频封面上传
+  $('#ed-poster-upload').addEventListener('click', () => $('#ed-poster-file').click());
+  $('#ed-poster-file').addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const r = await API.uploadImage(f);
+      edState.videoPoster = r.url;
+      $('#ed-poster-label').textContent = f.name;
+      toast('封面已上传', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+    e.target.value = '';
+  });
+
+  // BGM 上传
+  $('#ed-bgm-upload').addEventListener('click', () => $('#ed-bgm-file').click());
+  $('#ed-bgm-file').addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const r = await API.uploadAudio(f);
+      edState.bgmUrl = r.url;
+      $('#ed-bgm-label').textContent = f.name;
+      toast('BGM 已上传', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+    e.target.value = '';
+  });
+
+  const collectBase = () => {
+    const effects = $$('.ed-effect-cb').filter(cb => cb.checked).map(cb => cb.value).join(',');
+    const isVideo = edState.mediaType === 'video';
+    return {
       title: $('#ed-title').value.trim(),
-      content: $('#ed-content').value,
+      content: isVideo ? ($('#ed-excerpt')?.value || '') : $('#ed-content').value,
+      excerpt: isVideo ? ($('#ed-excerpt')?.value || '') : '',
       cover: $('#ed-cover').value.trim(),
       category: $('#ed-cat').value,
       tags: $('#ed-tags').value.split(',').map((s) => s.trim()).filter(Boolean),
+      media_type: edState.mediaType,
+      video_url: edState.videoUrl,
+      video_poster: edState.videoPoster,
+      audio_url: edState.audioUrl,
+      effects,
+      bgm_url: edState.bgmUrl,
     };
-    if (!data.title || !data.content) return toast('标题和内容不能为空', 'error');
+  };
+  const save = async (extra, successMsg) => {
+    const base = collectBase();
+    if (!base.title) return toast('标题不能为空', 'error');
+    if (base.media_type === 'article' && !base.content) return toast('内容不能为空', 'error');
+    const body = { ...base, ...extra };
     try {
-      const r = id ? await API.updatePost(id, data) : await API.createPost(data);
-      toast(id ? '已更新' : '发布成功', 'success');
-      location.hash = `#/post/${r.post.id}`;
+      const r = id ? await API.updatePost(id, body) : await API.createPost(body);
+      toast(successMsg, 'success');
+      if (extra.published === 0) {
+        if (!id) location.hash = `#/write?id=${r.post.id}`;
+        else viewWrite(new URLSearchParams(`id=${id}`));
+      } else {
+        location.hash = `#/post/${r.post.id}`;
+      }
     } catch (e) { toast(e.message, 'error'); }
+  };
+  $('#ed-save-draft').addEventListener('click', () => save({ published: 0, publish_at: null }, '已存草稿'));
+  $('#ed-save-publish').addEventListener('click', () => save({ published: 1 }, id && post.published ? '已更新' : '发布成功'));
+  $('#ed-save-schedule').addEventListener('click', () => {
+    const html = `
+      <div class="modal">
+        <h2>⏰ 定时发布</h2>
+        <p class="modal-sub">选择一个未来的时间，到点自动发布</p>
+        <label>发布时间</label>
+        <input type="datetime-local" id="sched-time" />
+        <button class="btn btn-primary" id="sched-ok">确定</button>
+      </div>
+    `;
+    showModal(html);
+    // 默认填入当前时间 + 5 分钟
+    const t = new Date(Date.now() + 5 * 60_000);
+    t.setSeconds(0, 0);
+    const pad = (n) => String(n).padStart(2, '0');
+    $('#sched-time').value = `${t.getFullYear()}-${pad(t.getMonth()+1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`;
+    $('#sched-ok').addEventListener('click', () => {
+      const v = $('#sched-time').value;
+      if (!v) return toast('请选择时间', 'error');
+      const ts = new Date(v).getTime();
+      if (!(ts > Date.now())) return toast('必须是未来时间', 'error');
+      hideModal();
+      save({ published: 0, publish_at: ts }, `已设定 ${fmt(ts)} 发布`);
+    });
   });
 }
 
@@ -531,7 +897,14 @@ async function viewMe() {
         <button class="btn" id="edit-profile">编辑资料</button>
       </div>
     </section>
-    <div class="section-header"><h2>我的文章</h2></div>
+    <div class="section-header">
+      <h2>我的内容</h2>
+      <div class="filters">
+        <button class="chip active" data-mtab="posts">我的文章</button>
+        <button class="chip" data-mtab="drafts">📝 草稿箱</button>
+        <button class="chip" data-mtab="bookmarks">我的收藏</button>
+      </div>
+    </div>
     <div id="my-posts">${loadingGrid(3)}</div>
   `;
   $('#edit-profile').addEventListener('click', () => {
@@ -561,11 +934,67 @@ async function viewMe() {
     });
   });
 
-  const r = await API.listPosts({ author: user.id, limit: 50 });
-  $('#my-posts').innerHTML = r.posts.length
-    ? `<div class="posts-grid">${r.posts.map((p, i) => postCardHTML(p, i * 40)).join('')}</div>`
-    : `<div class="empty-state"><div class="emoji">✍️</div><p>还没有写文章，<a href="#/write" style="color:var(--primary-glow)">开始写第一篇 →</a></p></div>`;
-  bindCardClicks();
+  const host = $('#my-posts');
+  const loadTab = async (tab) => {
+    host.innerHTML = loadingGrid(3);
+    if (tab === 'bookmarks') {
+      const r = await API.myBookmarks({ limit: 50 });
+      host.innerHTML = r.posts.length
+        ? `<div class="posts-grid">${r.posts.map((p, i) => postCardHTML(p, i * 40)).join('')}</div>`
+        : `<div class="empty-state"><div class="emoji">🔖</div><p>还没有收藏任何文章</p></div>`;
+      bindCardClicks();
+    } else if (tab === 'drafts') {
+      try {
+        const { drafts } = await API.myDrafts();
+        if (!drafts.length) {
+          host.innerHTML = `<div class="empty-state"><div class="emoji">📝</div><p>还没有草稿，<a href="#/write" style="color:var(--primary-glow)">开始写一篇 →</a></p></div>`;
+          return;
+        }
+        host.innerHTML = `<div class="draft-list">${drafts.map((d) => `
+          <div class="draft-item">
+            <div class="draft-main">
+              <div class="draft-head">
+                <span class="draft-badge ${d.isScheduled ? 'scheduled' : 'draft'}">
+                  ${d.isScheduled ? `⏰ 定时 · ${fmt(d.publish_at)} 发布` : '📝 草稿'}
+                </span>
+                <span class="draft-when">编辑于 ${fmt(d.updated_at)}</span>
+              </div>
+              <h3 class="draft-title">${escapeHTML(d.title || '(未命名)')}</h3>
+              <p class="draft-excerpt">${escapeHTML((d.excerpt || d.content || '').slice(0, 120))}</p>
+            </div>
+            <div class="draft-actions">
+              <a href="#/write?id=${d.id}" class="btn btn-ghost">继续编辑</a>
+              <button class="btn btn-danger" data-del-draft="${d.id}">删除</button>
+            </div>
+          </div>
+        `).join('')}</div>`;
+        $$('[data-del-draft]').forEach((b) => b.addEventListener('click', async () => {
+          if (!confirm('确定删除这篇草稿？')) return;
+          try {
+            await API.deletePost(b.dataset.delDraft);
+            toast('已删除', 'success');
+            loadTab('drafts');
+          } catch (e) { toast(e.message, 'error'); }
+        }));
+      } catch (e) {
+        host.innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`;
+      }
+    } else {
+      const r = await API.listPosts({ author: user.id, limit: 50 });
+      host.innerHTML = r.posts.length
+        ? `<div class="posts-grid">${r.posts.map((p, i) => postCardHTML(p, i * 40)).join('')}</div>`
+        : `<div class="empty-state"><div class="emoji">✍️</div><p>还没有写文章，<a href="#/write" style="color:var(--primary-glow)">开始写第一篇 →</a></p></div>`;
+      bindCardClicks();
+    }
+  };
+  loadTab('posts');
+  $$('[data-mtab]').forEach((c) =>
+    c.addEventListener('click', () => {
+      $$('[data-mtab]').forEach((x) => x.classList.remove('active'));
+      c.classList.add('active');
+      loadTab(c.dataset.mtab);
+    })
+  );
 }
 
 async function viewUser(id) {
@@ -578,16 +1007,44 @@ async function viewUser(id) {
     app().innerHTML = `<div class="empty-state"><div class="emoji">😢</div><p>${e.message}</p></div>`;
     return;
   }
+  const me = Auth.user();
+  const isMe = me && me.id === user.id;
   app().innerHTML = `
     <section class="profile-hero">
       <img src="${user.avatar}" alt="" />
       <h2>${escapeHTML(user.username)}</h2>
       <p class="bio">${escapeHTML(user.bio || '这个人很神秘')}</p>
-      <div class="meta">发布了 ${user.posts} 篇文章 · 注册于 ${fmt(user.created_at)}</div>
+      <div class="profile-stats">
+        <div><strong>${user.posts}</strong><span>文章</span></div>
+        <div><strong id="u-followers">${user.followers || 0}</strong><span>粉丝</span></div>
+        <div><strong>${user.following || 0}</strong><span>关注</span></div>
+      </div>
+      <div class="meta">注册于 ${fmt(user.created_at)}</div>
+      ${!isMe ? `
+        <div style="margin-top:16px">
+          <button class="btn ${user.followed ? '' : 'btn-primary'}" id="follow-btn">
+            ${user.followed ? '✓ 已关注' : '+ 关注'}
+          </button>
+        </div>
+      ` : ''}
     </section>
-    <div class="section-header"><h2>${user.username} 的文章</h2></div>
+    <div class="section-header"><h2>${escapeHTML(user.username)} 的文章</h2></div>
     <div id="u-posts">${loadingGrid(3)}</div>
   `;
+  if (!isMe) {
+    $('#follow-btn').addEventListener('click', async () => {
+      if (!me) return authModal('login');
+      try {
+        const r = await API.toggleFollow(user.id);
+        const btn = $('#follow-btn');
+        btn.textContent = r.followed ? '✓ 已关注' : '+ 关注';
+        btn.classList.toggle('btn-primary', !r.followed);
+        const cnt = $('#u-followers');
+        cnt.textContent = Number(cnt.textContent) + (r.followed ? 1 : -1);
+        toast(r.followed ? `已关注 ${user.username}` : '已取消关注', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  }
   const r = await API.listPosts({ author: id, limit: 50 });
   $('#u-posts').innerHTML = r.posts.length
     ? `<div class="posts-grid">${r.posts.map((p, i) => postCardHTML(p, i * 40)).join('')}</div>`
@@ -595,10 +1052,293 @@ async function viewUser(id) {
   bindCardClicks();
 }
 
+// ---------- Notifications (批次 3) ----------
+async function viewNotifications() {
+  if (!Auth.user()) { authModal('login'); return viewHome(); }
+  app().innerHTML = `
+    <section class="notif-page">
+      <div class="section-header">
+        <h2>🔔 通知中心</h2>
+        <button class="btn" id="mark-all-read">全部标记为已读</button>
+      </div>
+      <div id="notif-list">${loadingGrid(3)}</div>
+    </section>
+  `;
+  const load = async () => {
+    const { notifications } = await API.notifications();
+    if (!notifications.length) {
+      $('#notif-list').innerHTML = `<div class="empty-state"><div class="emoji">📭</div><p>暂无通知</p></div>`;
+      return;
+    }
+    const map = { like: ['❤️', '点赞了你的文章'], comment: ['💬', '评论了你的文章'], follow: ['👥', '关注了你'] };
+    $('#notif-list').innerHTML = `<div class="notif-list">${notifications.map((n) => {
+      const [emoji, text] = map[n.type] || ['🔔', n.type];
+      const target = n.type === 'follow'
+        ? `#/user/${n.actor_id}`
+        : (n.post_id ? `#/post/${n.post_id}` : '#');
+      return `
+        <a class="notif-item ${n.is_read ? '' : 'unread'}" href="${target}">
+          <img src="${n.actor_avatar || ''}" alt="" />
+          <div class="notif-body">
+            <div class="notif-head">
+              <span class="notif-emoji">${emoji}</span>
+              <strong>${escapeHTML(n.actor_name)}</strong>
+              <span class="notif-text">${text}</span>
+              ${n.post_title ? `<span class="notif-post">《${escapeHTML(n.post_title)}》</span>` : ''}
+            </div>
+            <div class="notif-when">${fmt(n.created_at)}</div>
+          </div>
+          ${n.is_read ? '' : '<span class="notif-dot"></span>'}
+        </a>
+      `;
+    }).join('')}</div>`;
+  };
+  await load();
+  // 进入页面即标记全部已读（异步,不阻塞渲染）
+  setTimeout(async () => {
+    try { await API.markAllRead(); refreshBell(); } catch (_) {}
+  }, 800);
+  $('#mark-all-read').addEventListener('click', async () => {
+    try {
+      await API.markAllRead();
+      refreshBell();
+      toast('已全部标记为已读', 'success');
+      load();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
+// ---------- Admin (批次 4) ----------
+async function viewAdmin(params) {
+  const me = Auth.user();
+  if (!me) { authModal('login'); return viewHome(); }
+  if (me.role !== 'admin') {
+    toast('需要管理员权限', 'error');
+    location.hash = '#/';
+    return;
+  }
+  const tab = params.get('tab') || 'overview';
+  app().innerHTML = `
+    <section class="admin-page">
+      <aside class="admin-side">
+        <h3>⚙️ 管理后台</h3>
+        <a href="#/admin?tab=overview" class="adm-link ${tab === 'overview' ? 'active' : ''}">📊 概览</a>
+        <a href="#/admin?tab=users" class="adm-link ${tab === 'users' ? 'active' : ''}">👥 用户</a>
+        <a href="#/admin?tab=posts" class="adm-link ${tab === 'posts' ? 'active' : ''}">📄 文章</a>
+        <a href="#/admin?tab=comments" class="adm-link ${tab === 'comments' ? 'active' : ''}">💬 评论</a>
+      </aside>
+      <div class="admin-main" id="adm-main">${loadingGrid(2)}</div>
+    </section>
+  `;
+  const host = $('#adm-main');
+  try {
+    if (tab === 'overview') await renderAdminOverview(host);
+    else if (tab === 'users') await renderAdminUsers(host);
+    else if (tab === 'posts') await renderAdminPosts(host);
+    else if (tab === 'comments') await renderAdminComments(host);
+  } catch (e) {
+    host.innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`;
+  }
+}
+
+async function renderAdminOverview(host) {
+  const o = await API.admin.overview();
+  const maxBar = Math.max(1, ...o.trend.flatMap((d) => [d.posts, d.comments, d.users]));
+  host.innerHTML = `
+    <h2>📊 概览</h2>
+    <div class="stats" style="margin-top:0">
+      <div class="stat-card"><div class="stat-value">${o.posts}</div><div class="stat-label">文章总数</div></div>
+      <div class="stat-card"><div class="stat-value">${o.users}</div><div class="stat-label">注册用户</div></div>
+      <div class="stat-card"><div class="stat-value">${o.comments}</div><div class="stat-label">总评论</div></div>
+      <div class="stat-card"><div class="stat-value">${o.views}</div><div class="stat-label">总阅读量</div></div>
+    </div>
+    <div class="admin-card">
+      <h3>近 7 日趋势</h3>
+      <div class="trend-chart">
+        ${o.trend.map((d) => `
+          <div class="trend-col">
+            <div class="trend-bars">
+              <div class="bar bar-posts" style="height:${d.posts / maxBar * 100}%" title="文章 ${d.posts}"></div>
+              <div class="bar bar-comments" style="height:${d.comments / maxBar * 100}%" title="评论 ${d.comments}"></div>
+              <div class="bar bar-users" style="height:${d.users / maxBar * 100}%" title="用户 ${d.users}"></div>
+            </div>
+            <div class="trend-date">${d.date}</div>
+          </div>
+        `).join('')}
+      </div>
+      <div class="trend-legend">
+        <span><i class="dot bar-posts"></i>新文章</span>
+        <span><i class="dot bar-comments"></i>新评论</span>
+        <span><i class="dot bar-users"></i>新用户</span>
+      </div>
+    </div>
+    <div class="admin-card">
+      <h3>最活跃作者</h3>
+      <div class="top-authors">
+        ${o.topAuthors.map((a) => `
+          <a href="#/user/${a.id}" class="top-author">
+            <img src="${a.avatar || ''}" alt="" />
+            <div>
+              <div class="ta-name">${escapeHTML(a.username)}</div>
+              <div class="ta-count">${a.posts} 篇文章</div>
+            </div>
+          </a>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+async function renderAdminUsers(host) {
+  host.innerHTML = `
+    <h2>👥 用户管理</h2>
+    <div class="admin-toolbar">
+      <input id="adm-q" placeholder="搜索用户名 / 邮箱..." />
+    </div>
+    <div id="adm-users-table"></div>
+  `;
+  const me = Auth.user();
+  const load = async (q = '') => {
+    const { users } = await API.admin.users({ q, limit: 100 });
+    $('#adm-users-table').innerHTML = `
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>用户</th><th>邮箱</th><th>角色</th><th>注册时间</th><th>操作</th></tr></thead>
+        <tbody>${users.map((u) => `
+          <tr>
+            <td>${u.id}</td>
+            <td><div class="cell-user"><img src="${u.avatar || ''}" alt="" /><span>${escapeHTML(u.username)}</span></div></td>
+            <td class="muted">${u.id === me.id ? '(自己)' : '—'}</td>
+            <td>
+              <select class="role-sel" data-id="${u.id}" ${u.id === me.id ? 'disabled' : ''}>
+                <option value="user" ${u.role === 'user' ? 'selected' : ''}>user</option>
+                <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin</option>
+              </select>
+            </td>
+            <td class="muted">${fmt(u.created_at)}</td>
+            <td>
+              ${u.id === me.id ? '' : `<button class="btn btn-danger btn-sm" data-del-u="${u.id}">删除</button>`}
+            </td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+    $$('.role-sel').forEach((sel) => sel.addEventListener('change', async () => {
+      try {
+        await API.admin.setUserRole(sel.dataset.id, sel.value);
+        toast('角色已更新', 'success');
+      } catch (e) { toast(e.message, 'error'); load(q); }
+    }));
+    $$('[data-del-u]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('删除该用户？其所有文章/评论也会被级联删除！')) return;
+      try {
+        await API.admin.deleteUser(b.dataset.delU);
+        toast('已删除', 'success'); load(q);
+      } catch (e) { toast(e.message, 'error'); }
+    }));
+  };
+  await load();
+  let t;
+  $('#adm-q').addEventListener('input', (e) => {
+    clearTimeout(t);
+    t = setTimeout(() => load(e.target.value.trim()), 250);
+  });
+}
+
+async function renderAdminPosts(host) {
+  host.innerHTML = `
+    <h2>📄 文章管理</h2>
+    <div class="admin-toolbar">
+      <input id="adm-q" placeholder="搜索标题 / 内容..." />
+      <select id="adm-status">
+        <option value="">全部状态</option>
+        <option value="published">已发布</option>
+        <option value="draft">草稿</option>
+        <option value="scheduled">定时</option>
+      </select>
+    </div>
+    <div id="adm-posts-table"></div>
+  `;
+  const load = async () => {
+    const q = $('#adm-q').value.trim();
+    const status = $('#adm-status').value;
+    const { posts } = await API.admin.posts({ q, status, limit: 50 });
+    const statusBadge = (p) => p.published
+      ? '<span class="badge ok">已发布</span>'
+      : (p.publish_at
+        ? `<span class="badge warn">⏰ ${fmt(p.publish_at)}</span>`
+        : '<span class="badge mute">草稿</span>');
+    $('#adm-posts-table').innerHTML = `
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>标题</th><th>作者</th><th>分类</th><th>👁</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+        <tbody>${posts.map((p) => `
+          <tr>
+            <td>${p.id}</td>
+            <td><a href="#/post/${p.id}" target="_blank">${escapeHTML(p.title)}</a></td>
+            <td>${escapeHTML(p.author)}</td>
+            <td class="muted">${escapeHTML(p.category || '')}</td>
+            <td>${p.views}</td>
+            <td>${statusBadge(p)}</td>
+            <td class="muted">${fmt(p.created_at)}</td>
+            <td><button class="btn btn-danger btn-sm" data-del-p="${p.id}">删除</button></td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+    $$('[data-del-p]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('确定删除该文章？')) return;
+      try { await API.admin.deletePost(b.dataset.delP); toast('已删除', 'success'); load(); }
+      catch (e) { toast(e.message, 'error'); }
+    }));
+  };
+  await load();
+  let t;
+  $('#adm-q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 250); });
+  $('#adm-status').addEventListener('change', load);
+}
+
+async function renderAdminComments(host) {
+  host.innerHTML = `
+    <h2>💬 评论管理</h2>
+    <div class="admin-toolbar">
+      <input id="adm-q" placeholder="搜索评论内容..." />
+    </div>
+    <div id="adm-comm-table"></div>
+  `;
+  const load = async () => {
+    const q = $('#adm-q').value.trim();
+    const { comments } = await API.admin.comments({ q, limit: 80 });
+    $('#adm-comm-table').innerHTML = `
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>用户</th><th>评论内容</th><th>文章</th><th>时间</th><th>操作</th></tr></thead>
+        <tbody>${comments.map((c) => `
+          <tr>
+            <td>${c.id}</td>
+            <td><div class="cell-user"><img src="${c.avatar || ''}" alt="" /><span>${escapeHTML(c.username)}</span></div></td>
+            <td class="cell-text">${escapeHTML(c.content)}</td>
+            <td>${c.post_title ? `<a href="#/post/${c.post_id}" target="_blank">${escapeHTML(c.post_title)}</a>` : '<span class="muted">已删除</span>'}</td>
+            <td class="muted">${fmt(c.created_at)}</td>
+            <td><button class="btn btn-danger btn-sm" data-del-c="${c.id}">删除</button></td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+    $$('[data-del-c]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('删除该评论？')) return;
+      try { await API.admin.deleteComment(b.dataset.delC); toast('已删除', 'success'); load(); }
+      catch (e) { toast(e.message, 'error'); }
+    }));
+  };
+  await load();
+  let t;
+  $('#adm-q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 250); });
+}
+
 // =========================================================================
 //  路由
 // =========================================================================
 function router() {
+  if (window.cleanupEffects) cleanupEffects();
+  if (window.__videoPlayer) { try { window.__videoPlayer.destroy(); } catch (_) {} window.__videoPlayer = null; }
   const raw = location.hash.slice(1) || '/';
   const [pathname, qs] = raw.split('?');
   const params = new URLSearchParams(qs || '');
@@ -620,6 +1360,10 @@ function router() {
     viewMe();
   } else if (pathname.startsWith('/user/')) {
     viewUser(pathname.split('/')[2]);
+  } else if (pathname === '/notifications') {
+    viewNotifications();
+  } else if (pathname === '/admin') {
+    viewAdmin(params);
   } else {
     app().innerHTML = `<div class="empty-state"><div class="emoji">🌌</div><p>页面不存在</p><a href="#/" class="btn" style="margin-top:16px">回首页</a></div>`;
   }
@@ -643,6 +1387,7 @@ window.addEventListener('DOMContentLoaded', () => {
   renderUserMenu();
   initSearch();
   router();
+  API.uploadLimits().then(l => { window.__uploadLimits = l; }).catch(() => {});
 });
 
 // expose for inline handlers
