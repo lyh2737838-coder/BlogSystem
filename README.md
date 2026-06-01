@@ -2,7 +2,7 @@
 
 一个功能完整、视觉精彩的全栈博客平台。后端 Node.js + Express + **MySQL**（可选 Redis 缓存），前端原生 JS + 现代 CSS。
 
-> 已完成四批次功能扩展：**收藏 / 草稿+定时+多媒体上传 / 关注+通知 / 管理后台**，前后端 API 端到端联通。
+> 已完成五批次功能扩展：**收藏 / 草稿+定时+多媒体上传 / 关注+通知 / 管理后台 / 楼中楼评论+浏览历史**，前后端 API 端到端联通。
 
 ## 第一次从 GitHub 克隆下来
 
@@ -57,7 +57,7 @@ npm run migrate
 
 迁移脚本会：
 - 自动 `CREATE DATABASE` 如果不存在
-- 创建全部 9 张表
+- 创建全部 10 张表
 - 优先从 `data/blog.json` 导入历史数据；没有就写入默认演示数据
 - 已有数据则跳过，不会重复导入
 
@@ -72,7 +72,8 @@ comments       评论（FK → posts, users）
 likes          点赞（复合主键 post_id + user_id）
 bookmarks      收藏（复合主键 post_id + user_id）
 follows        关注关系（follower_id + followed_id）
-notifications  消息通知（点赞 / 评论 / 关注 / 系统）
+notifications  消息通知（点赞 / 评论 / 回复 / 关注 / 系统）
+reading_history 浏览历史（user_id + post_id 复合主键，viewed_at 去重刷新）
 ```
 
 字符集 utf8mb4，引擎 InnoDB，所有外键 `ON DELETE CASCADE`。
@@ -83,12 +84,15 @@ notifications  消息通知（点赞 / 评论 / 关注 / 系统）
 - 注册 / 登录（JWT 30 天），个人资料修改
 - 文章 CRUD（Markdown），分类 + 多标签，浏览量
 - 评论、点赞、**收藏**
+- **楼中楼评论**：盖楼回复（`parent_id`），回复自动 @ 被回复者并发通知
+- **浏览历史**：登录后阅读文章自动记录，个人中心可查看 / 清空
 - 全文搜索 + 标签/分类筛选 + 最新/最热排序
 - **草稿系统**：保存草稿、定时发布（`scheduled_at`）
 - **多媒体上传**：图片 / 视频 / 音频（multer，大小限制 API 可查）
 - **关注系统**：关注/取关、粉丝列表、关注列表
 - **通知中心**：未读数、批量已读
 - **管理后台**：用户管理（封禁/改角色）、文章审核、评论审核、概览统计
+- **浏览历史 API**：`GET /api/me/history`、`DELETE /api/me/history`、`DELETE /api/me/history/:postId`
 - 缓存层：Redis 优先，未配置则降级为内存 LRU
 
 ### 前端

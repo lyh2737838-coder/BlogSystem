@@ -86,6 +86,13 @@ const API = {
     return request('GET', `/api/me/bookmarks?${qs}`);
   },
   myDrafts: () => request('GET', '/api/me/drafts'),
+  // reading history
+  history: (params = {}) => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([_, v]) => v != null && v !== '')));
+    return request('GET', `/api/me/history?${qs}`);
+  },
+  clearHistory: () => request('DELETE', '/api/me/history'),
+  deleteHistoryItem: (postId) => request('DELETE', `/api/me/history/${postId}`),
   uploadLimits: () => request('GET', '/api/upload/limits'),
   // upload
   async uploadImage(file) {

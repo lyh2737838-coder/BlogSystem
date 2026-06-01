@@ -13,6 +13,8 @@ const pool = mysql.createPool({
   charset: 'utf8mb4',
   dateStrings: false,
   timezone: 'local',
+  // 云数据库(TiDB/Aiven 等)强制 TLS：设 DB_SSL=true 即开启
+  ...(process.env.DB_SSL === 'true' ? { ssl: { minVersion: 'TLSv1.2', rejectUnauthorized: true } } : {}),
 });
 
 const q = (sql, params) => pool.query(sql, params).then(([rows]) => rows);
@@ -302,6 +304,42 @@ const db = {
   async markAllNotifRead(userId) {
     await q('UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0',
       [Number(userId)]);
+  },
+
+  // ---------- reading history (批次 5) ----------
+  // 记录浏览：同一用户对同一文章只留一条，重复浏览刷新 viewed_at
+  async recordView(userId, postId) {
+    await q(
+      `INSERT INTO reading_history (user_id, post_id, viewed_at) VALUES (?,?,?)
+       ON DUPLICATE KEY UPDATE viewed_at = VALUES(viewed_at)`,
+      [Number(userId), Number(postId), Date.now()]
+    );
+  },
+  // 浏览历史列表：只取仍已发布的文章，按最近浏览倒序
+  async historyForUser(userId, page = 1, limit = 24) {
+    const offset = (Number(page) - 1) * Number(limit);
+    const rows = await q(
+      `SELECT p.*, h.viewed_at FROM reading_history h
+       JOIN posts p ON p.id = h.post_id
+       WHERE h.user_id = ? AND p.published = 1
+       ORDER BY h.viewed_at DESC LIMIT ? OFFSET ?`,
+      [Number(userId), Number(limit), offset]
+    );
+    const [{ c: total } = { c: 0 }] = await q(
+      `SELECT COUNT(*) AS c FROM reading_history h JOIN posts p ON p.id = h.post_id
+       WHERE h.user_id = ? AND p.published = 1`,
+      [Number(userId)]
+    );
+    return { rows, total };
+  },
+  async clearHistory(userId) {
+    const r = await q('DELETE FROM reading_history WHERE user_id = ?', [Number(userId)]);
+    return r.affectedRows;
+  },
+  async deleteHistoryItem(userId, postId) {
+    const r = await q('DELETE FROM reading_history WHERE user_id = ? AND post_id = ?',
+      [Number(userId), Number(postId)]);
+    return r.affectedRows > 0;
   },
 
   // ---------- admin ----------

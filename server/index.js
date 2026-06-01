@@ -174,6 +174,8 @@ app.get('/api/posts/:id', authOptional, wrap(async (req, res) => {
   }
   await db.incrementViews(p.id);
   p.views = (p.views || 0) + 1;
+  // 登录用户：记录浏览历史（异步，不阻塞响应）
+  if (req.user) db.recordView(req.user.id, p.id).catch(() => {});
   if (!req.user) {
     const ck = `posts:item:${p.id}`;
     const post = await cache.wrap(ck, 300, () => hydratePost(p, null));
@@ -283,6 +285,27 @@ app.get('/api/me/bookmarks', authRequired, wrap(async (req, res) => {
   res.json({ posts, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
 }));
 
+// ---------- reading history (批次 5) ----------
+app.get('/api/me/history', authRequired, wrap(async (req, res) => {
+  const { page = 1, limit = 24 } = req.query;
+  const { rows, total } = await db.historyForUser(req.user.id, page, limit);
+  const posts = await Promise.all(rows.map(async (p) => ({
+    ...(await hydratePost(p, req.user.id)),
+    viewed_at: p.viewed_at,
+  })));
+  res.json({ posts, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
+}));
+
+app.delete('/api/me/history', authRequired, wrap(async (req, res) => {
+  const removed = await db.clearHistory(req.user.id);
+  res.json({ ok: true, removed });
+}));
+
+app.delete('/api/me/history/:postId', authRequired, wrap(async (req, res) => {
+  await db.deleteHistoryItem(req.user.id, req.params.postId);
+  res.json({ ok: true });
+}));
+
 // ---------- comments ----------
 app.get('/api/posts/:id/comments', wrap(async (req, res) => {
   res.json({ comments: await db.commentsFor(req.params.id) });
@@ -293,20 +316,44 @@ app.post('/api/posts/:id/comments', authRequired, wrap(async (req, res) => {
   if (!content || !content.trim()) return res.status(400).json({ error: '评论内容不能为空' });
   const post = await db.findPost(req.params.id);
   if (!post) return res.status(404).json({ error: '文章不存在' });
+  // 楼中楼：校验 parent_id 必须是本文已存在的评论
+  let parent = null;
+  if (parent_id != null) {
+    parent = await db.findComment(parent_id);
+    if (!parent || Number(parent.post_id) !== Number(req.params.id)) {
+      return res.status(400).json({ error: '回复的评论不存在' });
+    }
+  }
   const c = await db.createComment({
     post_id: req.params.id, user_id: req.user.id,
-    content: content.trim(), parent_id,
+    content: content.trim(), parent_id: parent ? parent.id : null,
   });
   const u = await db.findUserById(req.user.id);
-  await Promise.all([
+  const jobs = [
     cache.del(`posts:item:${req.params.id}`),
     cache.delByPrefix('posts:list:'),
     cache.del('stats'),
-    db.createNotification({
+  ];
+  if (parent) {
+    // 回复别人的评论 → 通知被回复者（type: reply）
+    jobs.push(db.createNotification({
+      user_id: parent.user_id, actor_id: req.user.id,
+      type: 'reply', post_id: post.id,
+    }));
+    // 楼主与被回复者不是同一人时，也通知楼主
+    if (Number(parent.user_id) !== Number(post.user_id)) {
+      jobs.push(db.createNotification({
+        user_id: post.user_id, actor_id: req.user.id,
+        type: 'comment', post_id: post.id,
+      }));
+    }
+  } else {
+    jobs.push(db.createNotification({
       user_id: post.user_id, actor_id: req.user.id,
       type: 'comment', post_id: post.id,
-    }),
-  ]);
+    }));
+  }
+  await Promise.all(jobs);
   res.json({ comment: { ...c, username: u.username, avatar: u.avatar } });
 }));
 

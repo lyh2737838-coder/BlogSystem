@@ -542,29 +542,104 @@ async function viewPost(id) {
   async function loadComments() {
     const { comments } = await API.listComments(p.id);
     const me = Auth.user();
-    $('#comments-list').innerHTML = comments.length ? comments.map((c) => `
-      <div class="comment-item">
-        <img src="${c.avatar}" alt="" />
-        <div class="comment-body">
-          <div class="comment-head">
-            <span class="name">${escapeHTML(c.username)}</span>
-            <span class="when">· ${fmt(c.created_at)}</span>
-            ${me && (me.id === c.user_id || me.role === 'admin') ? `<a style="margin-left:auto;color:#f87171;cursor:pointer;font-size:12px" data-del-c="${c.id}">删除</a>` : ''}
+    const byId = new Map(comments.map((c) => [c.id, c]));
+    // 沿 parent_id 上溯到最顶层评论（楼中楼统一挂到一级楼下）
+    const rootOf = (c) => {
+      let cur = c, guard = 0;
+      while (cur.parent_id && byId.has(cur.parent_id) && guard++ < 50) cur = byId.get(cur.parent_id);
+      return cur;
+    };
+    const roots = [];
+    const childrenOf = new Map(); // rootId -> 回复数组
+    for (const c of comments) {
+      if (!c.parent_id || !byId.has(c.parent_id)) {
+        roots.push(c);
+      } else {
+        const r = rootOf(c);
+        if (!childrenOf.has(r.id)) childrenOf.set(r.id, []);
+        childrenOf.get(r.id).push(c);
+      }
+    }
+    const canModify = (c) => me && (me.id === c.user_id || me.role === 'admin');
+    const delLink = (c) => canModify(c) ? `<a class="c-act c-del" data-del-c="${c.id}">删除</a>` : '';
+    const replyLink = (c) => me
+      ? `<a class="c-act c-reply" data-reply-c="${c.id}" data-reply-name="${escapeHTML(c.username)}">回复</a>` : '';
+
+    const replyHTML = (c) => {
+      const to = c.parent_id && byId.has(c.parent_id) ? byId.get(c.parent_id) : null;
+      return `
+        <div class="comment-reply" id="c-${c.id}">
+          <img src="${c.avatar}" alt="" />
+          <div class="comment-body">
+            <div class="comment-head">
+              <span class="name">${escapeHTML(c.username)}</span>
+              ${to ? `<span class="reply-to">回复 @${escapeHTML(to.username)}</span>` : ''}
+              <span class="when">· ${fmt(c.created_at)}</span>
+            </div>
+            <div class="comment-text">${escapeHTML(c.content)}</div>
+            <div class="comment-foot">${replyLink(c)}${delLink(c)}</div>
           </div>
-          <div class="comment-text">${escapeHTML(c.content)}</div>
-        </div>
-      </div>
-    `).join('') : `<div class="empty-state" style="padding:30px"><p>还没有评论，来抢沙发吧</p></div>`;
+        </div>`;
+    };
+
+    const rootHTML = (c) => {
+      const kids = (childrenOf.get(c.id) || []).sort((a, b) => a.created_at - b.created_at);
+      return `
+        <div class="comment-item" id="c-${c.id}">
+          <img src="${c.avatar}" alt="" />
+          <div class="comment-body">
+            <div class="comment-head">
+              <span class="name">${escapeHTML(c.username)}</span>
+              <span class="when">· ${fmt(c.created_at)}</span>
+            </div>
+            <div class="comment-text">${escapeHTML(c.content)}</div>
+            <div class="comment-foot">${replyLink(c)}${delLink(c)}</div>
+            ${kids.length ? `<div class="comment-replies">${kids.map(replyHTML).join('')}</div>` : ''}
+          </div>
+        </div>`;
+    };
+
+    $('#comments-list').innerHTML = comments.length
+      ? roots.map(rootHTML).join('')
+      : `<div class="empty-state" style="padding:30px"><p>还没有评论，来抢沙发吧</p></div>`;
 
     $$('[data-del-c]').forEach((a) =>
       a.addEventListener('click', async () => {
         if (!confirm('删除这条评论？')) return;
-        try {
-          await API.deleteComment(a.dataset.delC);
-          loadComments();
-        } catch (e) { toast(e.message, 'error'); }
+        try { await API.deleteComment(a.dataset.delC); loadComments(); }
+        catch (e) { toast(e.message, 'error'); }
       })
     );
+    $$('[data-reply-c]').forEach((a) =>
+      a.addEventListener('click', () => openReplyForm(a, a.dataset.replyC, a.dataset.replyName))
+    );
+
+    function openReplyForm(anchor, parentId, toName) {
+      const foot = anchor.closest('.comment-foot');
+      const existing = foot.parentElement.querySelector(':scope > .reply-box');
+      if (existing) { existing.remove(); return; } // 再次点击收起
+      const box = document.createElement('div');
+      box.className = 'reply-box';
+      box.innerHTML = `
+        <textarea placeholder="回复 @${escapeHTML(toName)}..."></textarea>
+        <div class="reply-actions">
+          <button class="btn btn-ghost btn-sm" data-cancel>取消</button>
+          <button class="btn btn-primary btn-sm" data-send>回复</button>
+        </div>`;
+      foot.insertAdjacentElement('afterend', box);
+      const ta = box.querySelector('textarea');
+      ta.focus();
+      box.querySelector('[data-cancel]').addEventListener('click', () => box.remove());
+      box.querySelector('[data-send]').addEventListener('click', async () => {
+        const content = ta.value.trim();
+        if (!content) return;
+        try {
+          await API.createComment(p.id, { content, parent_id: Number(parentId) });
+          toast('回复已发表', 'success');
+          loadComments();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    }
   }
 }
 
@@ -903,6 +978,7 @@ async function viewMe() {
         <button class="chip active" data-mtab="posts">我的文章</button>
         <button class="chip" data-mtab="drafts">📝 草稿箱</button>
         <button class="chip" data-mtab="bookmarks">我的收藏</button>
+        <button class="chip" data-mtab="history">🕘 浏览历史</button>
       </div>
     </div>
     <div id="my-posts">${loadingGrid(3)}</div>
@@ -979,6 +1055,24 @@ async function viewMe() {
       } catch (e) {
         host.innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`;
       }
+    } else if (tab === 'history') {
+      const r = await API.history({ limit: 50 });
+      if (!r.posts.length) {
+        host.innerHTML = `<div class="empty-state"><div class="emoji">🕘</div><p>还没有浏览记录，去<a href="#/explore" style="color:var(--primary-glow)">探索文章 →</a></p></div>`;
+        return;
+      }
+      host.innerHTML = `
+        <div class="history-bar">
+          <span class="muted">共 ${r.total} 条浏览记录</span>
+          <button class="btn btn-danger btn-sm" id="clear-history">清空历史</button>
+        </div>
+        <div class="posts-grid">${r.posts.map((p, i) => postCardHTML(p, i * 40)).join('')}</div>`;
+      bindCardClicks();
+      $('#clear-history').addEventListener('click', async () => {
+        if (!confirm('确定清空全部浏览历史？')) return;
+        try { await API.clearHistory(); toast('已清空', 'success'); loadTab('history'); }
+        catch (e) { toast(e.message, 'error'); }
+      });
     } else {
       const r = await API.listPosts({ author: user.id, limit: 50 });
       host.innerHTML = r.posts.length
@@ -1070,7 +1164,7 @@ async function viewNotifications() {
       $('#notif-list').innerHTML = `<div class="empty-state"><div class="emoji">📭</div><p>暂无通知</p></div>`;
       return;
     }
-    const map = { like: ['❤️', '点赞了你的文章'], comment: ['💬', '评论了你的文章'], follow: ['👥', '关注了你'] };
+    const map = { like: ['❤️', '点赞了你的文章'], comment: ['💬', '评论了你的文章'], follow: ['👥', '关注了你'], reply: ['💬', '回复了你的评论'] };
     $('#notif-list').innerHTML = `<div class="notif-list">${notifications.map((n) => {
       const [emoji, text] = map[n.type] || ['🔔', n.type];
       const target = n.type === 'follow'

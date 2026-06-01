@@ -1,0 +1,27 @@
+# Render 部署蓝图 —— 在 Render 选 "New +" → "Blueprint" 指向本仓库即可自动读取
+services:
+  - type: web
+    name: blogsystem
+    runtime: node
+    plan: free                 # 免费套餐（无访问 15 分钟后休眠，再访问约 50 秒冷启动）
+    buildCommand: npm install
+    startCommand: npm run start:prod   # 先建表/迁移(幂等)，再启动服务
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: DB_SSL            # 云 MySQL 强制 TLS
+        value: "true"
+      - key: JWT_SECRET        # 自动生成强随机串，无需手填
+        generateValue: true
+      # ↓↓↓ 以下来自你的免费云 MySQL，在 Render 控制台部署时按提示填入 ↓↓↓
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        sync: false

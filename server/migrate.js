@@ -13,6 +13,8 @@ const cfg = {
   password: process.env.DB_PASSWORD || '',
   charset: 'utf8mb4',
   multipleStatements: true,
+  // 云数据库(TiDB/Aiven 等)强制 TLS：设 DB_SSL=true 即开启
+  ...(process.env.DB_SSL === 'true' ? { ssl: { minVersion: 'TLSv1.2', rejectUnauthorized: true } } : {}),
 };
 const DB_NAME = process.env.DB_NAME || 'blog_system';
 
@@ -123,6 +125,16 @@ CREATE TABLE IF NOT EXISTS notifications (
   CONSTRAINT fk_no_user  FOREIGN KEY (user_id)  REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_no_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS reading_history (
+  user_id   INT UNSIGNED NOT NULL,
+  post_id   INT UNSIGNED NOT NULL,
+  viewed_at BIGINT       NOT NULL,
+  PRIMARY KEY (user_id, post_id),
+  KEY idx_rh_user_time (user_id, viewed_at),
+  CONSTRAINT fk_rh_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_rh_post FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `;
 
 // 幂等 ALTER —— 给老库加新列；migrate 可重复运行
@@ -204,9 +216,14 @@ async function run() {
   console.log('▶ 连接 MySQL...');
   const root = await mysql.createConnection(cfg);
   console.log(`▶ 创建数据库 \`${DB_NAME}\`（如果不存在）...`);
-  await root.query(
-    `CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
-  );
+  try {
+    await root.query(
+      `CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+    );
+  } catch (e) {
+    // 云数据库通常已预建库且账号无 CREATE DATABASE 权限 —— 跳过，直接用现有库
+    console.warn(`⚠ 跳过建库（${e.code || e.message}），假定数据库已存在。`);
+  }
   await root.end();
 
   const conn = await mysql.createConnection({ ...cfg, database: DB_NAME });

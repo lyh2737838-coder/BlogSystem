@@ -6,7 +6,11 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "migrate": "node server/migrate.js"
+    "migrate": "node server/migrate.js",
+    "start:prod": "node server/migrate.js && node server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
