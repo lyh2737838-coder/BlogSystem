@@ -2,7 +2,11 @@
 
 一个功能完整、视觉精彩的全栈博客平台。后端 Node.js + Express + **MySQL**（可选 Redis 缓存），前端原生 JS + 现代 CSS。
 
-> 已完成五批次功能扩展：**收藏 / 草稿+定时+多媒体上传 / 关注+通知 / 管理后台 / 楼中楼评论+浏览历史**，前后端 API 端到端联通。
+> 已完成扩展功能（与上次相比新增）：
+> - 💬 **私信系统** — 实时聊天式私信，会话列表 + 未读提醒 + 轮询新消息
+> - 🎯 **快捷操作菜单（FAB）** — 右下角悬浮快捷按钮，一键写文章 / 回到顶部
+> - 🔍 **用户搜索** — 导航栏搜索下拉显示用户 + 文章结果，探索页同步搜索用户
+> - 👤 **个人空间大充实** — 用户主页新增「赞过」「粉丝」「关注」Tab，粉丝关注列表卡片展示
 
 ## 第一次从 GitHub 克隆下来
 
@@ -74,6 +78,7 @@ bookmarks      收藏（复合主键 post_id + user_id）
 follows        关注关系（follower_id + followed_id）
 notifications  消息通知（点赞 / 评论 / 回复 / 关注 / 系统）
 reading_history 浏览历史（user_id + post_id 复合主键，viewed_at 去重刷新）
+messages       私信（sender_id + recipient_id + content + is_read）
 ```
 
 字符集 utf8mb4，引擎 InnoDB，所有外键 `ON DELETE CASCADE`。
@@ -91,16 +96,22 @@ reading_history 浏览历史（user_id + post_id 复合主键，viewed_at 去重
 - **多媒体上传**：图片 / 视频 / 音频（multer，大小限制 API 可查）
 - **关注系统**：关注/取关、粉丝列表、关注列表
 - **通知中心**：未读数、批量已读
+- **私信系统**：`GET /api/messages/conversations` 会话列表、`GET /api/messages/:userId` 消息记录、`POST /api/messages/:userId` 发送消息、未读计数、已读回执
+- **用户搜索**：`GET /api/users/search?q=` 按用户名 / 简介搜索，附带文章数和粉丝数；文章列表支持 `liked_by` 参数查询用户赞过的文章
 - **管理后台**：用户管理（封禁/改角色）、文章审核、评论审核、概览统计
 - **浏览历史 API**：`GET /api/me/history`、`DELETE /api/me/history`、`DELETE /api/me/history/:postId`
 - 缓存层：Redis 优先，未配置则降级为内存 LRU
 
 ### 前端
-- 单页应用，hash 路由，1400 行原生 JS
-- 暗黑 / 明亮主题切换（持久化）
+- 单页应用，hash 路由，1700+ 行原生 JS
+- 暗黑 / 明亮 / 玻璃 / 复古纸 / 赛博 五主题切换（持久化）
 - 极光渐变 + 毛玻璃 + 页面特效（`effects.js`）
 - Markdown 实时预览写作页 + 代码高亮
 - 自研视频播放器（`video-player.js`）
+- **快捷操作菜单（FAB）**：右下角浮动按钮，快速写文章 / 回顶部
+- **搜索下拉面板**：输入实时搜索用户 + 文章，头像与标题预览
+- **个人空间大充实**：用户主页 4 Tab（文章 / 赞过 / 粉丝 / 关注），粉丝关注列表卡片展示
+- **私信聊天界面**：自动按日期分组、轮询新消息、标记已读
 - 响应式
 
 ## 目录
@@ -111,12 +122,13 @@ BlogSystem/
 ├── data/blog.json            # JSON 版本存档（迁移源）
 ├── public/
 │   ├── index.html
-│   ├── css/style.css         # 1700+ 行样式
+│   ├── css/style.css         # 1900+ 行样式
 │   └── js/
 │       ├── api.js            # 接口封装
-│       ├── app.js            # SPA 主逻辑
+│       ├── app.js            # SPA 主逻辑（1700+ 行）
 │       ├── effects.js        # 页面特效
-│       └── video-player.js   # 自研视频播放器
+│       ├── video-player.js   # 自研视频播放器
+│       └── fab-menu.js       # 右下角快捷菜单
 ├── server/
 │   ├── index.js              # Express + 全部 40+ 路由
 │   ├── db.js                 # MySQL 数据访问层
