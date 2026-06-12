@@ -129,6 +129,10 @@ const API = {
   categories: () => request('GET', '/api/categories'),
   stats: () => request('GET', '/api/stats'),
   user: (id) => request('GET', `/api/users/${id}`),
+  searchUsers: (params = {}) => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([_, v]) => v != null && v !== '')));
+    return request('GET', `/api/users/search?${qs}`);
+  },
   // admin
   admin: {
     overview: () => request('GET', '/api/admin/overview'),
@@ -148,5 +152,14 @@ const API = {
       return request('GET', `/api/admin/comments?${qs}`);
     },
     deleteComment: (id) => request('DELETE', `/api/admin/comments/${id}`),
+  },
+  // messages (批次 7)
+  messages: {
+    conversations: () => request('GET', '/api/messages/conversations'),
+    unreadCount:   () => request('GET', '/api/messages/unread'),
+    thread: (uid, params = {}) => request('GET', `/api/messages/${uid}?` +
+      new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([,v]) => v != null && v !== '')))),
+    send:   (uid, body) => request('POST', `/api/messages/${uid}`, body),
+    markRead: (uid)     => request('POST', `/api/messages/${uid}/read`),
   },
 };

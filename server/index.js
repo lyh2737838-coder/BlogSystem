@@ -144,18 +144,18 @@ app.put('/api/auth/me', authRequired, wrap(async (req, res) => {
 
 // ---------- posts ----------
 app.get('/api/posts', authOptional, wrap(async (req, res) => {
-  const { q, tag, category, author, page = 1, limit = 12, sort = 'new' } = req.query;
+  const { q, tag, category, author, liked_by, page = 1, limit = 12, sort = 'new' } = req.query;
   // 只对未登录用户走缓存(登录用户的 liked 字段因人而异)
   if (!req.user) {
-    const ck = `posts:list:${JSON.stringify({ q, tag, category, author, page, limit, sort })}`;
+    const ck = `posts:list:${JSON.stringify({ q, tag, category, author, liked_by, page, limit, sort })}`;
     const payload = await cache.wrap(ck, 60, async () => {
-      const { rows, total } = await db.searchPosts({ q, tag, category, author, sort, page, limit });
+      const { rows, total } = await db.searchPosts({ q, tag, category, author, liked_by, sort, page, limit });
       const posts = await Promise.all(rows.map((p) => hydratePost(p, null)));
       return { posts, total, page: Number(page), pages: Math.ceil(total / Number(limit)) };
     });
     return res.json(payload);
   }
-  const { rows, total } = await db.searchPosts({ q, tag, category, author, sort, page, limit });
+  const { rows, total } = await db.searchPosts({ q, tag, category, author, liked_by, sort, page, limit });
   const posts = await Promise.all(rows.map((p) => hydratePost(p, req.user.id)));
   res.json({ posts, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
 }));
@@ -381,6 +381,21 @@ app.get('/api/stats', wrap(async (_req, res) =>
   res.json(await cache.wrap('stats', 60, () => db.stats()))
 ));
 
+app.get('/api/users/search', wrap(async (req, res) => {
+  const { q, page = 1, limit = 10 } = req.query;
+  if (!q || !q.trim()) return res.json({ users: [], total: 0 });
+  const { rows, total } = await db.searchUsers({ q, page, limit });
+  // 为每个用户附加文章数和粉丝数
+  const users = await Promise.all(rows.map(async (u) => {
+    const [posts, followers] = await Promise.all([
+      db.countUserPosts(u.id),
+      db.countFollowers(u.id),
+    ]);
+    return { ...u, posts, followers };
+  }));
+  res.json({ users, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
+}));
+
 app.get('/api/users/:id', authOptional, wrap(async (req, res) => {
   const u = await db.findUserById(req.params.id);
   if (!u) return res.status(404).json({ error: '用户不存在' });
@@ -573,6 +588,42 @@ app.delete('/api/admin/comments/:id', adminRequired, wrap(async (req, res) => {
     cache.delByPrefix('posts:list:'),
     cache.del('stats'),
   ]);
+  res.json({ ok: true });
+}));
+
+// ---------- messages (批次 7) ----------
+app.get('/api/messages/conversations', authRequired, wrap(async (req, res) => {
+  const conversations = await db.listConversations(req.user.id);
+  res.json({ conversations });
+}));
+
+app.get('/api/messages/unread', authRequired, wrap(async (req, res) => {
+  const count = await db.unreadMessageCount(req.user.id);
+  res.json({ count });
+}));
+
+app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
+  const other = await db.findUserById(req.params.userId);
+  if (!other) return res.status(404).json({ error: '用户不存在' });
+  const { page = 1, limit = 30 } = req.query;
+  const { rows, total } = await db.messagesBetween(req.user.id, other.id, { page, limit });
+  const pages = Math.ceil(total / Number(limit));
+  res.json({ user: { id: other.id, username: other.username, avatar: other.avatar },
+    messages: rows.reverse(), total, page: Number(page), pages });
+}));
+
+app.post('/api/messages/:userId', authRequired, wrap(async (req, res) => {
+  const { content } = req.body || {};
+  if (!content || !content.trim()) return res.status(400).json({ error: '消息内容不能为空' });
+  const other = await db.findUserById(req.params.userId);
+  if (!other) return res.status(404).json({ error: '用户不存在' });
+  if (Number(other.id) === req.user.id) return res.status(400).json({ error: '不能给自己发消息' });
+  const message = await db.createMessage({ sender_id: req.user.id, recipient_id: other.id, content: content.trim() });
+  res.json({ message });
+}));
+
+app.post('/api/messages/:userId/read', authRequired, wrap(async (req, res) => {
+  await db.markMessagesRead(req.user.id, req.params.userId);
   res.json({ ok: true });
 }));
 

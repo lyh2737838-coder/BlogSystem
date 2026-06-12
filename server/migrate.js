@@ -135,6 +135,20 @@ CREATE TABLE IF NOT EXISTS reading_history (
   CONSTRAINT fk_rh_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_rh_post FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS messages (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  sender_id    INT UNSIGNED NOT NULL,
+  recipient_id INT UNSIGNED NOT NULL,
+  content TEXT NOT NULL,
+  is_read TINYINT NOT NULL DEFAULT 0,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (id),
+  KEY idx_msg_pair (sender_id, recipient_id, created_at),
+  KEY idx_msg_unread (recipient_id, is_read),
+  CONSTRAINT fk_msg_sender    FOREIGN KEY (sender_id)    REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_msg_recipient FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `;
 
 // 幂等 ALTER —— 给老库加新列；migrate 可重复运行

@@ -102,7 +102,7 @@ const db = {
     );
     return ids;
   },
-  async searchPosts({ q: kw, tag, category, author, sort = 'new', page = 1, limit = 12 }) {
+  async searchPosts({ q: kw, tag, category, author, liked_by, sort = 'new', page = 1, limit = 12 }) {
     const where = ['p.published = 1'];
     const params = [];
     let join = '';
@@ -112,8 +112,13 @@ const db = {
     }
     if (category) { where.push('p.category = ?'); params.push(category); }
     if (author) { where.push('p.user_id = ?'); params.push(Number(author)); }
+    if (liked_by) {
+      join = 'JOIN likes lk ON lk.post_id = p.id';
+      where.push('lk.user_id = ?');
+      params.push(Number(liked_by));
+    }
     if (tag) {
-      join = 'JOIN post_tags pt ON pt.post_id = p.id JOIN tags t ON t.id = pt.tag_id';
+      join += (join ? ' ' : '') + 'JOIN post_tags pt ON pt.post_id = p.id JOIN tags t ON t.id = pt.tag_id';
       where.push('t.name = ?');
       params.push(tag);
     }
@@ -373,6 +378,23 @@ const db = {
     return { ...base, trend: buckets, topAuthors };
   },
 
+  // ---------- user search (public) ----------
+  async searchUsers({ q: kw, page = 1, limit = 10 } = {}) {
+    const where = [], params = [];
+    if (kw) { where.push('(username LIKE ? OR bio LIKE ?)'); params.push(`%${kw}%`, `%${kw}%`); }
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const offset = (Number(page) - 1) * Number(limit);
+    const rows = await q(
+      `SELECT id, username, avatar, bio, role, created_at FROM users
+       ${w} ORDER BY id ASC LIMIT ? OFFSET ?`,
+      [...params, Number(limit), offset]
+    );
+    const [{ c: total } = { c: 0 }] = await q(
+      `SELECT COUNT(*) AS c FROM users ${w}`, params
+    );
+    return { rows, total };
+  },
+
   async adminListUsers({ page = 1, limit = 20, q: kw = '' } = {}) {
     const where = [], params = [];
     if (kw) { where.push('(username LIKE ? OR email LIKE ?)'); params.push(`%${kw}%`, `%${kw}%`); }
@@ -439,6 +461,74 @@ const db = {
       `SELECT COUNT(*) AS c FROM comments c ${w}`, params
     );
     return { rows, total };
+  },
+
+  // ---------- messages (批次 7) ----------
+  async createMessage({ sender_id, recipient_id, content }) {
+    const created_at = Date.now();
+    const r = await q(
+      'INSERT INTO messages (sender_id, recipient_id, content, created_at) VALUES (?,?,?,?)',
+      [sender_id, Number(recipient_id), content, created_at]
+    );
+    return { id: r.insertId, sender_id, recipient_id, content, is_read: 0, created_at };
+  },
+  async messagesBetween(meId, otherId, { page = 1, limit = 30 } = {}) {
+    const offset = (Number(page) - 1) * Number(limit);
+    const rows = await q(
+      `SELECT * FROM messages
+       WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
+       ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [meId, Number(otherId), Number(otherId), meId, Number(limit), offset]
+    );
+    const [{ c: total } = { c: 0 }] = await q(
+      `SELECT COUNT(*) AS c FROM messages
+       WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)`,
+      [meId, Number(otherId), Number(otherId), meId]
+    );
+    return { rows, total };
+  },
+  async listConversations(meId) {
+    const rows = await q(
+      `SELECT CASE WHEN sender_id=? THEN recipient_id ELSE sender_id END AS other_id,
+              MAX(created_at) AS last_at
+       FROM messages WHERE sender_id=? OR recipient_id=?
+       GROUP BY other_id ORDER BY last_at DESC`,
+      [meId, meId, meId]
+    );
+    // JS 富化对方资料 + 最后消息 + 未读数
+    const convs = [];
+    for (const r of rows) {
+      const u = await db.findUserById(r.other_id);
+      if (!u) continue;
+      const [lastMsg] = await q(
+        `SELECT content FROM messages WHERE (sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)
+         ORDER BY created_at DESC LIMIT 1`,
+        [meId, r.other_id, r.other_id, meId]
+      );
+      const [{ c: unread }] = await q(
+        'SELECT COUNT(*) AS c FROM messages WHERE recipient_id=? AND sender_id=? AND is_read=0',
+        [meId, r.other_id]
+      );
+      convs.push({
+        user: { id: u.id, username: u.username, avatar: u.avatar },
+        last_msg: lastMsg?.content?.slice(0, 80) || '',
+        unread, last_at: r.last_at,
+      });
+    }
+    return convs;
+  },
+  async markMessagesRead(meId, otherId) {
+    await q(
+      'UPDATE messages SET is_read=1 WHERE recipient_id=? AND sender_id=? AND is_read=0',
+      [meId, Number(otherId)]
+    );
+  },
+  async unreadMessageCount(meId) {
+    const [{ c }] = await q(
+      'SELECT COUNT(*) AS c FROM messages WHERE recipient_id=? AND is_read=0',
+      [meId]
+    );
+    return c;
   },
 };
 

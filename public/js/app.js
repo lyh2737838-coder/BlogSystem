@@ -144,6 +144,10 @@ function renderUserMenu() {
   }
   const isAdmin = user.role === 'admin';
   root.innerHTML = `
+    <button class="bell-btn" id="msg-btn" title="私信">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span class="bell-dot" id="msg-dot" style="display:none">0</span>
+    </button>
     <button class="bell-btn" id="bell-btn" title="通知">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
       <span class="bell-dot" id="bell-dot" style="display:none">0</span>
@@ -156,6 +160,7 @@ function renderUserMenu() {
       <a href="#/me">📝 个人中心</a>
       <a href="#/write">✍️ 写文章</a>
       <a href="#/user/${user.id}">👤 我的主页</a>
+      <a href="#/messages">💬 私信</a>
       <a href="#/notifications">🔔 通知中心</a>
       ${isAdmin ? `<a href="#/admin">⚙️ 管理后台</a>` : ''}
       <div class="divider"></div>
@@ -169,6 +174,7 @@ function renderUserMenu() {
     dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
   });
   document.addEventListener('click', () => (dd.style.display = 'none'));
+  $('#msg-btn').addEventListener('click', () => (location.hash = '#/messages'));
   $('#bell-btn').addEventListener('click', () => (location.hash = '#/notifications'));
   $('#logout').addEventListener('click', () => {
     Auth.clear();
@@ -194,10 +200,25 @@ async function refreshBell() {
     }
   } catch (_) {}
 }
+async function refreshMsgBadge() {
+  if (!Auth.user()) return;
+  try {
+    const { count } = await API.messages.unreadCount();
+    const dot = $('#msg-dot');
+    if (!dot) return;
+    if (count > 0) {
+      dot.style.display = 'flex';
+      dot.textContent = count > 99 ? '99+' : String(count);
+    } else {
+      dot.style.display = 'none';
+    }
+  } catch (_) {}
+}
 function startBellPolling() {
   if (window.__bellTimer) clearInterval(window.__bellTimer);
   refreshBell();
-  window.__bellTimer = setInterval(refreshBell, 30_000);
+  refreshMsgBadge();
+  window.__bellTimer = setInterval(() => { refreshBell(); refreshMsgBadge(); }, 30_000);
 }
 
 // ---------- Markdown ----------
@@ -341,6 +362,7 @@ async function viewExplore(params) {
         <div class="section-header">
           <h2>${q ? `搜索：${escapeHTML(q)}` : tag ? `标签：#${escapeHTML(tag)}` : category ? `分类：${escapeHTML(category)}` : '所有文章'}</h2>
         </div>
+        ${q ? `<div id="explore-users"></div>` : ''}
         <div id="explore-posts">${loadingGrid()}</div>
       </div>
       <aside>
@@ -355,6 +377,19 @@ async function viewExplore(params) {
       </aside>
     </div>
   `;
+
+  // 有搜索词时，同时搜索用户
+  if (q) {
+    API.searchUsers({ q, limit: 6 }).then(({ users }) => {
+      if (users?.length) {
+        $('#explore-users').innerHTML = `
+          <div class="section-header" style="margin-top:0"><h3 style="font-size:20px">👤 相关用户</h3></div>
+          <div class="user-card-list">${users.map(u => userCardHTML(u)).join('')}</div>
+        `;
+        bindUserCardClicks();
+      }
+    }).catch(() => {});
+  }
 
   const r = await API.listPosts({ q, tag, category, limit: 24 });
   $('#explore-posts').innerHTML = r.posts.length
@@ -1109,21 +1144,34 @@ async function viewUser(id) {
       <h2>${escapeHTML(user.username)}</h2>
       <p class="bio">${escapeHTML(user.bio || '这个人很神秘')}</p>
       <div class="profile-stats">
-        <div><strong>${user.posts}</strong><span>文章</span></div>
+        <div><strong id="u-posts-count">${user.posts}</strong><span>文章</span></div>
         <div><strong id="u-followers">${user.followers || 0}</strong><span>粉丝</span></div>
-        <div><strong>${user.following || 0}</strong><span>关注</span></div>
+        <div><strong id="u-following">${user.following || 0}</strong><span>关注</span></div>
       </div>
-      <div class="meta">注册于 ${fmt(user.created_at)}</div>
+      <div class="profile-meta-detail" style="margin-top:10px">
+        <span class="meta-chip">🆔 ${user.id}</span>
+        <span class="meta-chip">📅 注册于 ${fmt(user.created_at)}</span>
+        <span class="meta-chip">${user.role === 'admin' ? '🔧 管理员' : '👤 用户'}</span>
+      </div>
       ${!isMe ? `
-        <div style="margin-top:16px">
+        <div style="margin-top:16px;display:flex;gap:10px;justify-content:center">
           <button class="btn ${user.followed ? '' : 'btn-primary'}" id="follow-btn">
             ${user.followed ? '✓ 已关注' : '+ 关注'}
           </button>
+          <button class="btn" id="msg-user-btn">💬 私信</button>
         </div>
       ` : ''}
     </section>
-    <div class="section-header"><h2>${escapeHTML(user.username)} 的文章</h2></div>
-    <div id="u-posts">${loadingGrid(3)}</div>
+    <div class="section-header">
+      <h2>${escapeHTML(user.username)} 的动态</h2>
+      <div class="filters">
+        <button class="chip active" data-utab="posts">📝 文章</button>
+        <button class="chip" data-utab="likes">❤️ 赞过</button>
+        <button class="chip" data-utab="followers">👥 粉丝</button>
+        <button class="chip" data-utab="following">🤝 关注</button>
+      </div>
+    </div>
+    <div id="u-content">${loadingGrid(3)}</div>
   `;
   if (!isMe) {
     $('#follow-btn').addEventListener('click', async () => {
@@ -1138,12 +1186,85 @@ async function viewUser(id) {
         toast(r.followed ? `已关注 ${user.username}` : '已取消关注', 'success');
       } catch (e) { toast(e.message, 'error'); }
     });
+    $('#msg-user-btn').addEventListener('click', () => {
+      if (!me) return authModal('login');
+      location.hash = '#/messages/' + user.id;
+    });
   }
-  const r = await API.listPosts({ author: id, limit: 50 });
-  $('#u-posts').innerHTML = r.posts.length
-    ? `<div class="posts-grid">${r.posts.map((p, i) => postCardHTML(p, i * 40)).join('')}</div>`
-    : `<div class="empty-state"><div class="emoji">📭</div><p>TA 还没有发布文章</p></div>`;
-  bindCardClicks();
+
+  const host = $('#u-content');
+  async function loadTab(tab) {
+    host.innerHTML = loadingGrid(3);
+    if (tab === 'followers') {
+      try {
+        const { users } = await API.followers(id);
+        if (!users.length) {
+          host.innerHTML = `<div class="empty-state"><div class="emoji">👥</div><p>还没有粉丝</p></div>`;
+          return;
+        }
+        host.innerHTML = `<div class="user-card-list">${users.map(u => userCardHTML(u)).join('')}</div>`;
+        bindUserCardClicks();
+      } catch (e) { host.innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`; }
+    } else if (tab === 'following') {
+      try {
+        const { users } = await API.following(id);
+        if (!users.length) {
+          host.innerHTML = `<div class="empty-state"><div class="emoji">🤝</div><p>还没有关注任何人</p></div>`;
+          return;
+        }
+        host.innerHTML = `<div class="user-card-list">${users.map(u => userCardHTML(u)).join('')}</div>`;
+        bindUserCardClicks();
+      } catch (e) { host.innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`; }
+    } else if (tab === 'likes') {
+      // 显示该用户赞过的文章
+      try {
+        const r = await API.listPosts({ liked_by: id, limit: 50 });
+        if (!r.posts.length) {
+          host.innerHTML = `<div class="empty-state"><div class="emoji">❤️</div><p>TA 还没有点赞过文章</p></div>`;
+          return;
+        }
+        host.innerHTML = `<div class="posts-grid">${r.posts.map((p, i) => postCardHTML(p, i * 40)).join('')}</div>`;
+        bindCardClicks();
+      } catch (e) { host.innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`; }
+    } else {
+      // posts
+      try {
+        const r = await API.listPosts({ author: id, limit: 50 });
+        if (!r.posts.length) {
+          host.innerHTML = `<div class="empty-state"><div class="emoji">📭</div><p>TA 还没有发布文章</p></div>`;
+          return;
+        }
+        host.innerHTML = `<div class="posts-grid">${r.posts.map((p, i) => postCardHTML(p, i * 40)).join('')}</div>`;
+        bindCardClicks();
+      } catch (e) { host.innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`; }
+    }
+  }
+
+  loadTab('posts');
+  $$('[data-utab]').forEach((c) =>
+    c.addEventListener('click', () => {
+      $$('[data-utab]').forEach((x) => x.classList.remove('active'));
+      c.classList.add('active');
+      loadTab(c.dataset.utab);
+    })
+  );
+}
+
+function userCardHTML(u) {
+  return `
+    <a class="user-card" href="#/user/${u.id}">
+      <img src="${u.avatar}" alt="" />
+      <div class="user-card-body">
+        <div class="user-card-name">${escapeHTML(u.username)}</div>
+        <div class="user-card-bio">${escapeHTML(u.bio || '这个人很神秘')}</div>
+      </div>
+      <span class="user-card-arrow">→</span>
+    </a>
+  `;
+}
+
+function bindUserCardClicks() {
+  // user-card 本身是 <a>，无需额外绑定 click
 }
 
 // ---------- Notifications (批次 3) ----------
@@ -1200,6 +1321,141 @@ async function viewNotifications() {
       load();
     } catch (e) { toast(e.message, 'error'); }
   });
+}
+
+// ---------- Messages (批次 7) ----------
+async function viewMessages() {
+  if (!Auth.user()) { authModal('login'); return viewHome(); }
+  app().innerHTML = `
+    <section class="notif-page">
+      <div class="section-header">
+        <h2>💬 私信</h2>
+      </div>
+      <div id="msg-conv-list">${loadingGrid(3)}</div>
+    </section>
+  `;
+  try {
+    const { conversations } = await API.messages.conversations();
+    if (!conversations.length) {
+      $('#msg-conv-list').innerHTML = `<div class="empty-state"><div class="emoji">💬</div><p>还没有私信，去<a href="#/explore" style="color:var(--primary-glow)">探索</a>页面找人聊天吧</p></div>`;
+      return;
+    }
+    $('#msg-conv-list').innerHTML = `<div class="notif-list">${conversations.map(c => `
+      <a class="notif-item ${c.unread ? 'unread' : ''}" href="#/messages/${c.user.id}">
+        <img src="${c.user.avatar}" alt="" />
+        <div class="notif-body">
+          <div class="notif-head">
+            <strong>${escapeHTML(c.user.username)}</strong>
+            <span class="muted">${escapeHTML(c.last_msg)}</span>
+          </div>
+          <div class="notif-when">${fmt(c.last_at)}</div>
+        </div>
+        ${c.unread ? `<span class="notif-dot">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}
+      </a>
+    `).join('')}</div>`;
+  } catch (e) {
+    $('#msg-conv-list').innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`;
+  }
+}
+
+async function viewConversation(otherId) {
+  if (!Auth.user()) { authModal('login'); return viewHome(); }
+  app().innerHTML = `
+    <section class="chat-page">
+      <div class="chat-header" id="chat-header">加载中...</div>
+      <div class="chat-thread" id="chat-thread"></div>
+      <div class="chat-input-bar">
+        <textarea id="chat-input" placeholder="输入消息..." rows="1"></textarea>
+        <button class="btn btn-primary" id="chat-send">发送</button>
+      </div>
+    </section>
+  `;
+  let otherUser = null;
+  try {
+    const { user } = await API.messages.thread(otherId);
+    otherUser = user;
+    $('#chat-header').innerHTML = `
+      <a href="#/messages" class="btn btn-ghost btn-sm" style="margin-right:8px">← 返回</a>
+      <img src="${user.avatar}" alt="" class="chat-user-avatar" />
+      <span>${escapeHTML(user.username)}</span>
+    `;
+    await renderMessages();
+  } catch (e) {
+    $('#chat-thread').innerHTML = `<div class="empty-state"><p>${e.message}</p></div>`;
+    return;
+  }
+
+  // 标记已读
+  API.messages.markRead(otherId).catch(() => {});
+
+  // 发送
+  async function doSend() {
+    const ta = $('#chat-input');
+    const content = ta.value.trim();
+    if (!content) return;
+    ta.value = '';
+    ta.style.height = 'auto';
+    try {
+      await API.messages.send(otherId, { content });
+      await renderMessages();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+  $('#chat-send').addEventListener('click', doSend);
+  const ta = $('#chat-input');
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+  });
+  ta.addEventListener('input', () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+  });
+  ta.focus();
+
+  // 轮询新消息
+  if (window.__msgTimer) clearInterval(window.__msgTimer);
+  function dateKey(ts) {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`;
+  }
+  function friendlyDate(ts) {
+    const d = new Date(ts);
+    const today = new Date();
+    if (dateKey(ts) === dateKey(today)) return '今天';
+    const yest = new Date(today);
+    yest.setDate(yest.getDate() - 1);
+    if (dateKey(ts) === dateKey(yest)) return '昨天';
+    return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
+  }
+  async function renderMessages() {
+    try {
+      const { messages } = await API.messages.thread(otherId);
+      const me = Auth.user();
+      const host = $('#chat-thread');
+      if (!messages.length) {
+        host.innerHTML = `<div class="empty-state" style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center"><div class="emoji">💬</div><p>发送第一条消息吧 ✨</p></div>`;
+        return;
+      }
+      let html = '', lastDate = '';
+      for (const m of messages) {
+        const dk = dateKey(m.created_at);
+        if (dk !== lastDate) {
+          html += `<div class="chat-date-sep">${friendlyDate(m.created_at)}</div>`;
+          lastDate = dk;
+        }
+        html += `
+          <div class="msg-bubble ${m.sender_id === me.id ? 'mine' : 'theirs'}">
+            <div class="msg-text">${escapeHTML(m.content)}</div>
+            <div class="msg-time">${new Date(m.created_at).toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'})}</div>
+          </div>`;
+      }
+      host.innerHTML = html;
+      host.scrollTop = host.scrollHeight;
+    } catch (_) {}
+  }
+  window.__msgTimer = setInterval(async () => {
+    await renderMessages();
+    refreshMsgBadge();
+  }, 10000);
 }
 
 // ---------- Admin (批次 4) ----------
@@ -1433,6 +1689,7 @@ async function renderAdminComments(host) {
 function router() {
   if (window.cleanupEffects) cleanupEffects();
   if (window.__videoPlayer) { try { window.__videoPlayer.destroy(); } catch (_) {} window.__videoPlayer = null; }
+  if (window.__msgTimer) { clearInterval(window.__msgTimer); window.__msgTimer = null; }
   const raw = location.hash.slice(1) || '/';
   const [pathname, qs] = raw.split('?');
   const params = new URLSearchParams(qs || '');
@@ -1456,6 +1713,10 @@ function router() {
     viewUser(pathname.split('/')[2]);
   } else if (pathname === '/notifications') {
     viewNotifications();
+  } else if (pathname === '/messages') {
+    viewMessages();
+  } else if (pathname.startsWith('/messages/')) {
+    viewConversation(pathname.split('/')[2]);
   } else if (pathname === '/admin') {
     viewAdmin(params);
   } else {
@@ -1467,12 +1728,85 @@ function router() {
 // ---------- 初始化 ----------
 function initSearch() {
   const input = $('#search-input');
+  let dropdown, timer;
+
+  function removeDropdown() {
+    if (dropdown) { dropdown.remove(); dropdown = null; }
+  }
+
+  input.addEventListener('focus', () => {
+    if (input.value.trim()) triggerSearch();
+  });
+  input.addEventListener('blur', () => {
+    setTimeout(removeDropdown, 200);
+  });
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const v = input.value.trim();
+    if (!v) { removeDropdown(); return; }
+    timer = setTimeout(triggerSearch, 250);
+  });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
+      removeDropdown();
       const v = input.value.trim();
       if (v) location.hash = `#/explore?q=${encodeURIComponent(v)}`;
     }
+    if (e.key === 'Escape') removeDropdown();
   });
+
+  async function triggerSearch() {
+    const q = input.value.trim();
+    if (!q) { removeDropdown(); return; }
+    removeDropdown();
+    dropdown = document.createElement('div');
+    dropdown.className = 'search-dropdown';
+    dropdown.innerHTML = '<div class="search-dd-loading">搜索中...</div>';
+    input.insertAdjacentElement('afterend', dropdown);
+
+    try {
+      const [userRes, postRes] = await Promise.all([
+        API.searchUsers({ q, limit: 5 }),
+        API.listPosts({ q, limit: 5 }),
+      ]);
+      let html = '';
+      // 用户结果
+      if (userRes.users?.length) {
+        html += `<div class="search-dd-group"><div class="search-dd-title">👤 用户</div>`;
+        html += userRes.users.map(u => `
+          <a class="search-dd-item" href="#/user/${u.id}">
+            <img src="${u.avatar}" alt="" />
+            <div class="search-dd-info">
+              <span class="search-dd-name">${escapeHTML(u.username)}</span>
+              <span class="search-dd-desc">${escapeHTML(u.bio || '')}${u.posts != null ? ` · ${u.posts} 篇文章` : ''}</span>
+            </div>
+          </a>
+        `).join('');
+        html += `</div>`;
+      }
+      // 文章结果
+      if (postRes.posts?.length) {
+        html += `<div class="search-dd-group"><div class="search-dd-title">📄 文章</div>`;
+        html += postRes.posts.map(p => `
+          <a class="search-dd-item" href="#/post/${p.id}">
+            ${p.cover ? `<img class="search-dd-img" src="${p.cover}" alt="" />` : '<div class="search-dd-img-placeholder">📄</div>'}
+            <div class="search-dd-info">
+              <span class="search-dd-name">${escapeHTML(p.title)}</span>
+              <span class="search-dd-desc">${escapeHTML(p.author?.username || '')} · 👁 ${p.views}</span>
+            </div>
+          </a>
+        `).join('');
+        html += `</div>`;
+      }
+      if (!userRes.users?.length && !postRes.posts?.length) {
+        html = `<div class="search-dd-empty">没有找到相关内容</div>`;
+      }
+      html += `<a class="search-dd-all" href="#/explore?q=${encodeURIComponent(q)}">查看全部结果 →</a>`;
+      dropdown.innerHTML = html;
+    } catch (_) {
+      dropdown.innerHTML = `<div class="search-dd-empty">搜索出错了</div>`;
+    }
+  }
 }
 
 window.addEventListener('hashchange', router);
